@@ -12,6 +12,7 @@ class Workout(TimestampedModel):
     intensity = models.CharField(max_length=255, choices=[('low', 'Low'), ('medium', 'Medium'), ('high', 'High')]) ## intensity is the intensity of the workout
     notes = models.TextField(blank=True, null=True) ## notes is a text field that the user can add to the workout
     is_done = models.BooleanField(default=False) ## is_done is a boolean field that indicates whether the workout has been completed
+##    body_parts_worked = models.JSONField(default=list, blank=True, null=True) ## body_parts_worked is a json field that contains the body parts worked in the workout
 
 
 class WorkoutExercise(TimestampedModel):

@@ -11,13 +11,30 @@ from exercise.models import Exercise
 
 class CreateWorkoutView(APIView):
     permission_classes = [IsAuthenticated]
-
+   
     def post(self, request):
+        # Change this line to .first() instead of .exists()
+        active_workout = Workout.objects.filter(user=request.user, is_done=False).first()
+        
+        if active_workout:
+            return Response({
+                'error': 'ACTIVE_WORKOUT_EXISTS',
+                'active_workout': active_workout.id
+                }, status=status.HTTP_400_BAD_REQUEST)
+                
         serializer = CreateWorkoutSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class GetWorkoutView(APIView):
+
+    permission_classes = [IsAuthenticated]
+    def get(self, request):
+        workouts = Workout.objects.filter(user=request.user).order_by('-created_at')
+        serializer = CreateWorkoutSerializer(workouts, many=True)
+        return Response(serializer.data)
 
 class AddExerciseToWorkoutView(APIView):
     permission_classes = [IsAuthenticated]
