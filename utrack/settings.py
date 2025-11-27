@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure-mgv+8j9y@yo#6%5t__e$^+m@*d!%nsjh=vki57cj7!df46*#%8
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*'] # Allow all hosts for development (including 192.168.1.9)
 
 
 # Application definition
@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'corsheaders', # Add corsheaders
     'core',
     'rest_framework',
     'user',
@@ -45,6 +46,7 @@ INSTALLED_APPS = [
 AUTH_USER_MODEL = 'user.CustomUser'
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware', # Add CorsMiddleware at the top
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -125,3 +127,6 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# CORS Settings
+CORS_ALLOW_ALL_ORIGINS = True # For dev, allow everyone. Safer than listing specific IPs if you move around.
