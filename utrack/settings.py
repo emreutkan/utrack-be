@@ -41,6 +41,8 @@ INSTALLED_APPS = [
     'core',
     'rest_framework',
     'user',
+    'exercise', # Add exercise app
+    'workout', # Add workout app
 ]
 
 AUTH_USER_MODEL = 'user.CustomUser'
@@ -130,3 +132,9 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS Settings
 CORS_ALLOW_ALL_ORIGINS = True # For dev, allow everyone. Safer than listing specific IPs if you move around.
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+}

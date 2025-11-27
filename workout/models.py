@@ -8,7 +8,6 @@ from exercise.models import Exercise
 class Workout(TimestampedModel):
     title = models.CharField(max_length=255)
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
-    date = models.DateField()
     duration = models.PositiveIntegerField(default=0) ## duration is the time in seconds that the workout took
     intensity = models.CharField(max_length=255, choices=[('low', 'Low'), ('medium', 'Medium'), ('high', 'High')]) ## intensity is the intensity of the workout
     notes = models.TextField(blank=True, null=True) ## notes is a text field that the user can add to the workout
@@ -22,16 +21,19 @@ class WorkoutExercise(TimestampedModel):
     class Meta:
         ordering = ['order']
 
+# workout/models.py - ExerciseSet
 class ExerciseSet(TimestampedModel):
     workout_exercise = models.ForeignKey(WorkoutExercise, on_delete=models.CASCADE, related_name='sets')
-    set = models.PositiveIntegerField(default=0)
-    rep = models.PositiveIntegerField(default=0)
-    weight = models.PositiveIntegerField(default=0)
+    set_number = models.PositiveIntegerField()  # Keep this, remove 'set'
+    reps = models.PositiveIntegerField(default=0)  # Change 'rep' to 'reps'
+    weight = models.DecimalField(max_digits=6, decimal_places=2, default=0)  # Change to DecimalField
     rest_time_before_set = models.PositiveIntegerField(default=0)
     is_warmup = models.BooleanField(default=False)
     reps_in_reserve = models.PositiveIntegerField(default=0)
-    set_number = models.PositiveIntegerField() ## set_number is the number of the set
-
 
     class Meta:
         ordering = ['set_number']
+    
+    def __str__(self):
+        return f"Set {self.set_number} - {self.reps} reps @ {self.weight}"
+        

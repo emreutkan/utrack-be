@@ -13,8 +13,10 @@ class Exercise(TimestampedModel):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
     instructions = models.TextField(blank=True, null=True)
+    safety_tips = models.TextField(blank=True, null=True)
     image = models.ImageField(upload_to='exercises/', blank=True, null=True)
     video_url = models.URLField(blank=True, null=True)
+    is_active = models.BooleanField(default=True)
 
     MUSCLE_GROUPS = [
         # Chest
@@ -42,6 +44,10 @@ class Exercise(TimestampedModel):
         # Core
         ('abs', 'Core – Abs'),
         ('obliques', 'Core – Obliques'),
+        
+        # Other
+        ('abductors', 'Abductors'),
+        ('adductors', 'Adductors'),
     ]
 
     primary_muscle = models.CharField(max_length=255, choices=MUSCLE_GROUPS)
@@ -56,19 +62,33 @@ class Exercise(TimestampedModel):
         ('resistance_band', 'Resistance Band'),
         ('kettlebell', 'Kettlebell'),
         ('treadmill', 'Treadmill'),
+        ('stationary_bike', 'Stationary Bike'),
+        ('elliptical', 'Elliptical'),
+        ('rowing_machine', 'Rowing Machine'),
+        ('bicycle', 'Bicycle'),
+        ('ez_bar', 'EZ Bar'),
+        ('dip_bars', 'Dip Bars'),
+        ('pull_up_bar', 'Pull Up Bar'),
+        ('preacher_bench', 'Preacher Bench'),
         ('other', 'Other'),
     ]
 
     equipment_type = models.CharField(max_length=255, choices=EQUIPMENT_TYPES)
+    
+    CATEGORY_CHOICES = [
+        ('compound', 'Compound'),
+        ('isolation', 'Isolation'),
+        ('cardio', 'Cardio'),
+        ('stability', 'Stability'),
+    ]
+    category = models.CharField(max_length=50, choices=CATEGORY_CHOICES, default='compound')
+    
+    DIFFICULTY_CHOICES = [
+        ('beginner', 'Beginner'),
+        ('intermediate', 'Intermediate'),
+        ('advanced', 'Advanced'),
+    ]
+    difficulty_level = models.CharField(max_length=50, choices=DIFFICULTY_CHOICES, default='beginner')
 
     def __str__(self): # __str__ is a special method in Python that is used to return a string representation of the object.
         return self.name ## self.name is the name of the exercise.
-
-
-class ExerciseSet(TimestampedModel):
-    exercise = models.ForeignKey(Exercise, on_delete=models.CASCADE)
-    set = models.PositiveIntegerField(default=0)
-    rep = models.PositiveIntegerField(default=0)
-    weight = models.PositiveIntegerField(default=0)
-    rest_time_before_set = models.PositiveIntegerField(default=0)
-
