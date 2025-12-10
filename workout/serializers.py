@@ -55,21 +55,23 @@ class CompleteWorkoutSerializer(serializers.ModelSerializer):
         
         return super().update(instance, validated_data)
 
-class WorkoutExerciseSerializer(serializers.ModelSerializer):
-    # This nested serializer will fetch the full exercise details
-    # instead of just the ID.
-    exercise = ExerciseSerializer(read_only=True)
-    
-    class Meta:
-        model = WorkoutExercise
-        # Now 'exercise' field will contain the full object: { "id": 1, "name": "Bench Press", ... }
-        fields = ['id', 'workout', 'exercise', 'order']
-        read_only_fields = ['id']
-
 class ExerciseSetSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExerciseSet
         fields = ['id', 'workout_exercise', 'set_number', 'reps', 'weight', 'rest_time_before_set', 'is_warmup', 'reps_in_reserve']
+        read_only_fields = ['id']
+
+class WorkoutExerciseSerializer(serializers.ModelSerializer):
+    # This nested serializer will fetch the full exercise details
+    # instead of just the ID.
+    exercise = ExerciseSerializer(read_only=True)
+    # Add this line to fetch related sets
+    sets = ExerciseSetSerializer(many=True, read_only=True) 
+    
+    class Meta:
+        model = WorkoutExercise
+        # Now 'exercise' field will contain the full object: { "id": 1, "name": "Bench Press", ... }
+        fields = ['id', 'workout', 'exercise', 'order', 'sets']
         read_only_fields = ['id']
 
 class GetWorkoutSerializer(serializers.ModelSerializer):
