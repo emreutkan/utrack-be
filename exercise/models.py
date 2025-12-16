@@ -1,10 +1,20 @@
 from os import name
 from django.db import models
+import os
+from django.utils.text import slugify
 
 # Create your models here.
 
 from core.models import TimestampedModel
 from user.models import CustomUser
+
+def exercise_image_upload_path(instance, filename):
+    # Get the file extension
+    ext = filename.split('.')[-1]
+    # Create the filename based on the exercise name
+    filename = f"{slugify(instance.name)}.{ext}"
+    # Return the full path
+    return os.path.join('exercises', filename)
 
 
 class Exercise(TimestampedModel):
@@ -14,7 +24,7 @@ class Exercise(TimestampedModel):
     description = models.TextField(blank=True, null=True)
     instructions = models.TextField(blank=True, null=True)
     safety_tips = models.TextField(blank=True, null=True)
-    image = models.ImageField(upload_to='exercises/', blank=True, null=True)
+    image = models.ImageField(upload_to=exercise_image_upload_path, blank=True, null=True)
     video_url = models.URLField(blank=True, null=True)
     is_active = models.BooleanField(default=True)
 

@@ -37,4 +37,19 @@ class ExerciseSet(TimestampedModel):
     
     def __str__(self):
         return f"Set {self.set_number} - {self.reps} reps @ {self.weight}"
-        
+
+class TemplateWorkout(TimestampedModel):
+    title = models.CharField(max_length=255)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
+    exercises = models.ManyToManyField(Exercise, through='TemplateWorkoutExercise')
+
+    def __str__(self):
+        return self.title
+
+class TemplateWorkoutExercise(TimestampedModel):
+    template_workout = models.ForeignKey(TemplateWorkout, on_delete=models.CASCADE)
+    exercise = models.ForeignKey(Exercise, on_delete=models.CASCADE)
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['order']
