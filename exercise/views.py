@@ -50,16 +50,3 @@ class addExerciseToWorkoutView(APIView):
         
         return Response(ExerciseSerializer(exercise).data, status=status.HTTP_200_OK)
 
-class UpdateExerciseOrderView(APIView):
-    permission_classes = [IsAuthenticated]
-    def post(self, request, workout_id):
-        try:
-            workout = Workout.objects.get(id=workout_id, user=request.user)
-        except Workout.DoesNotExist:
-            return Response({'error': 'Workout not found'}, status=status.HTTP_404_NOT_FOUND)
-        exercises = WorkoutExercise.objects.filter(workout=workout)
-        for exercise in exercises:
-            exercise.order = exercise.order + 1
-            exercise.save()
-        return Response(status=status.HTTP_200_OK)
-

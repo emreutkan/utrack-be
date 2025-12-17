@@ -131,13 +131,35 @@ class DeleteWorkoutExerciseView(APIView):
             # Ensure the workout exercise belongs to a workout owned by the user
             workout_exercise = WorkoutExercise.objects.get(id=workout_exercise_id, workout__user=request.user)
             workout_exercise_order = workout_exercise.order
+            current_workout = workout_exercise.workout
             workout_exercise.delete()
 
-            ## for all workouts that have order greater than the deleted exercise's order, we need to decrement the order by 1
-            for workout in Workout.objects.all():
-                for exercise in WorkoutExercise.objects.filter(workout=workout, order__gt=workout_exercise_order):
-                    exercise.order = exercise.order - 1
-                    exercise.save()
+            ## for all exercises in THIS workout that have order greater than the deleted exercise's order, we need to decrement the order by 1
+            for exercise in WorkoutExercise.objects.filter(workout=current_workout, order__gt=workout_exercise_order):
+                exercise.order = exercise.order - 1
+                exercise.save()
             return Response(status=status.HTTP_204_NO_CONTENT)
         except WorkoutExercise.DoesNotExist:
             return Response({'error': 'Exercise not found in workout'}, status=status.HTTP_404_NOT_FOUND)
+
+class UpdateExerciseOrderView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request, workout_id):
+        try:
+            workout = Workout.objects.get(id=workout_id, user=request.user)
+            
+            # Expecting a list of {id: 1, order: 2} where id is the WorkoutExercise ID
+            exercise_orders = request.data.get('exercise_orders', [])
+            
+            for item in exercise_orders:
+                try:
+                    # Using workout_exercise_id to identify the specific exercise instance in this workout
+                    workout_exercise = WorkoutExercise.objects.get(id=item['id'], workout=workout)
+                    workout_exercise.order = item['order']
+                    workout_exercise.save()
+                except WorkoutExercise.DoesNotExist:
+                    continue # Skip if ID is wrong or belongs to another workout
+                
+            return Response(status=status.HTTP_200_OK)
+        except Workout.DoesNotExist:
+            return Response({'error': 'Workout not found'}, status=status.HTTP_404_NOT_FOUND)

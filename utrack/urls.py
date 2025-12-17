@@ -19,6 +19,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from user.social_views import GoogleLogin, AppleLogin # Import the views you just created
+from rest_framework_simplejwt.views import TokenRefreshView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -30,6 +31,9 @@ urlpatterns = [
     path('auth/registration/', include('dj_rest_auth.registration.urls')),
     path('auth/google/', GoogleLogin.as_view(), name='google_login'),
     path('auth/apple/', AppleLogin.as_view(), name='apple_login'),
+    # Add this line to expose the refresh endpoint at the root level /api/token/refresh/
+    # OR change your client to point to /api/user/refresh/ which is where it is currently located inside user.urls
+    path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'), 
 ]
 
 if settings.DEBUG:
