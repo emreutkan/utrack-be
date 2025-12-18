@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import CreateWorkoutView, AddExerciseToWorkoutView, AddExerciseSetToWorkoutExerciseView, GetWorkoutView, GetActiveWorkoutView, DeleteExerciseSetView, DeleteWorkoutExerciseView, UpdateExerciseOrderView, CompleteWorkoutView, DeleteWorkoutView, CheckTodayRestDayView, CreateTemplateWorkoutView, GetTemplateWorkoutsView, StartTemplateWorkoutView, UpdateWorkoutView, UpdateExerciseSetView, GetRestTimerStateView, CalendarView, GetAvailableYearsView, CalendarStatsView
+from .views import CreateWorkoutView, AddExerciseToWorkoutView, AddExerciseSetToWorkoutExerciseView, GetWorkoutView, GetActiveWorkoutView, DeleteExerciseSetView, DeleteWorkoutExerciseView, UpdateExerciseOrderView, CompleteWorkoutView, DeleteWorkoutView, CheckTodayRestDayView, CreateTemplateWorkoutView, GetTemplateWorkoutsView, StartTemplateWorkoutView, UpdateWorkoutView, UpdateExerciseSetView, GetRestTimerStateView, CalendarView, GetAvailableYearsView, CalendarStatsView, GetExercise1RMHistoryView
 urlpatterns = [
     path('create/', CreateWorkoutView.as_view(), name='create-workout'),
     path('list/', GetWorkoutView.as_view(), name='list-workouts'),
@@ -12,6 +12,8 @@ urlpatterns = [
     path('calendar/', CalendarView.as_view(), name='calendar-view'),
     path('calendar/stats/', CalendarStatsView.as_view(), name='calendar-stats'),
     path('years/', GetAvailableYearsView.as_view(), name='available-years'),
+    # 1RM History endpoint
+    path('exercise/<int:exercise_id>/1rm-history/', GetExercise1RMHistoryView.as_view(), name='exercise-1rm-history'),
     path('set/<int:set_id>/update/', UpdateExerciseSetView.as_view(), name='update-set'),
     path('set/<int:set_id>/delete/', DeleteExerciseSetView.as_view(), name='delete-set'),
     path('exercise/<int:workout_exercise_id>/delete/', DeleteWorkoutExerciseView.as_view(), name='delete-workout-exercise'),

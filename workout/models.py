@@ -22,6 +22,7 @@ class WorkoutExercise(TimestampedModel):
     workout = models.ForeignKey(Workout, on_delete=models.CASCADE)
     exercise = models.ForeignKey(Exercise, on_delete=models.CASCADE)  # Link to Exercise template
     order = models.PositiveIntegerField(default=0)
+    one_rep_max = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)  # Calculated 1RM from sets
     class Meta:
         ordering = ['order']
 

@@ -44,6 +44,46 @@ def calculate_rest_status(elapsed_seconds, category):
             "max_goal": phase2_limit
         }
 
+def calculate_one_rep_max(weight, reps):
+    """
+    Calculate 1RM using Brzycki formula.
+    Formula: 1RM = weight / (1.0278 - 0.0278 × reps)
+    """
+    if reps <= 0 or weight <= 0:
+        return None
+    
+    # Brzycki formula
+    denominator = 1.0278 - (0.0278 * reps)
+    if denominator <= 0:
+        return None
+    
+    one_rm = float(weight) / denominator
+    return round(one_rm, 2)
+
+def calculate_workout_exercise_1rm(workout_exercise):
+    """
+    Calculate 1RM for a workout exercise.
+    Gets all non-warmup sets, calculates 1RM for each, returns the highest.
+    """
+    # Get all non-warmup sets for this exercise
+    sets = ExerciseSet.objects.filter(
+        workout_exercise=workout_exercise,
+        is_warmup=False
+    ).exclude(weight=0).exclude(reps=0)
+    
+    if not sets.exists():
+        return None
+    
+    # Calculate 1RM for each set and find the maximum
+    max_1rm = None
+    for exercise_set in sets:
+        one_rm = calculate_one_rep_max(exercise_set.weight, exercise_set.reps)
+        if one_rm is not None:
+            if max_1rm is None or one_rm > max_1rm:
+                max_1rm = one_rm
+    
+    return max_1rm
+
 def get_rest_timer_state(workout):
     """
     Get rest timer state for active workout.
@@ -376,10 +416,18 @@ class CompleteWorkoutView(APIView):
                 workout.intensity = request.data['intensity']
             if 'notes' in request.data:
                 workout.notes = request.data['notes']
-                
+
             workout.is_done = True
             workout.save()
             
+            # Calculate 1RM for all exercises in the workout
+            workout_exercises = WorkoutExercise.objects.filter(workout=workout)
+            for workout_exercise in workout_exercises:
+                one_rm = calculate_workout_exercise_1rm(workout_exercise)
+                if one_rm is not None:
+                    workout_exercise.one_rep_max = one_rm
+                    workout_exercise.save()
+
             return Response(GetWorkoutSerializer(workout).data, status=status.HTTP_200_OK)
         except Workout.DoesNotExist:
             return Response({'error': 'Workout not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -777,5 +825,43 @@ class GetRestTimerStateView(APIView):
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+class GetExercise1RMHistoryView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, exercise_id):
+        """
+        GET /api/workout/exercise/<exercise_id>/1rm-history/
+        Returns 1RM history for a specific exercise across all workouts.
+        """
+        try:
+            # Verify exercise exists
+            exercise = Exercise.objects.get(id=exercise_id)
+        except Exercise.DoesNotExist:
+            return Response({'error': 'Exercise not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Get all workout exercises for this exercise, only from completed workouts
+        workout_exercises = WorkoutExercise.objects.filter(
+            exercise_id=exercise_id,
+            workout__user=request.user,
+            workout__is_done=True,
+            one_rep_max__isnull=False
+        ).select_related('workout').order_by('-workout__datetime')
+        
+        history = []
+        for workout_exercise in workout_exercises:
+            history.append({
+                'workout_id': workout_exercise.workout.id,
+                'workout_title': workout_exercise.workout.title,
+                'workout_date': workout_exercise.workout.datetime.isoformat(),
+                'one_rep_max': float(workout_exercise.one_rep_max) if workout_exercise.one_rep_max else None
+            })
+        
+        return Response({
+            'exercise_id': exercise_id,
+            'exercise_name': exercise.name,
+            'history': history,
+            'total_workouts': len(history)
+        })
 
     

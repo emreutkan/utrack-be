@@ -105,8 +105,8 @@ class WorkoutExerciseSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = WorkoutExercise
-        fields = ['id', 'workout', 'exercise', 'order', 'sets']
-        read_only_fields = ['id']
+        fields = ['id', 'workout', 'exercise', 'order', 'sets', 'one_rep_max']
+        read_only_fields = ['id', 'one_rep_max']
     
     def to_representation(self, instance):
         # Override to return full exercise object instead of just ID
