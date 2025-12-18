@@ -4,7 +4,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
+from django.db.models import Q
+from calendar import monthrange
 from .serializers import CreateWorkoutSerializer, WorkoutExerciseSerializer, ExerciseSetSerializer, GetWorkoutSerializer, UpdateWorkoutSerializer, CreateTemplateWorkoutSerializer, GetTemplateWorkoutSerializer # Import GetWorkoutSerializer
 from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise
 from exercise.models import Exercise
@@ -446,24 +448,188 @@ class DeleteWorkoutView(APIView):
             return Response({'error': 'Workout not found'}, status=status.HTTP_404_NOT_FOUND)
 
 
-class WorkoutsInTimeFrameView(APIView):
+class CalendarView(APIView):
     permission_classes = [IsAuthenticated]
-
-    def get(self, request,):
-        if request.week_number and request.month and request.year:
-            workouts = Workout.objects.filter(user=request.user, is_done=True, is_rest_day=False, datetime__week=request.week_number, datetime__month=request.month, datetime__year=request.year).order_by('-created_at')
-            serializer = GetWorkoutSerializer(workouts, many=True)
-            return Response(serializer.data)
-        elif request.month and request.year:
-            workouts = Workout.objects.filter(user=request.user, is_done=True, is_rest_day=False, datetime__month=request.month, datetime__year=request.year).order_by('-created_at')
-            serializer = GetWorkoutSerializer(workouts, many=True)
-            return Response(serializer.data)
-        elif request.year:
-            workouts = Workout.objects.filter(user=request.user, is_done=True, is_rest_day=False, datetime__year=request.year).order_by('-created_at')
-            serializer = GetWorkoutSerializer(workouts, many=True)
-            return Response(serializer.data)
+    
+    def get(self, request):
+        """
+        GET /api/workout/calendar/
+        Returns calendar data with workouts marked by date.
+        Query params: year, month, week (optional)
+        """
+        year = request.query_params.get('year')
+        month = request.query_params.get('month', None)
+        week = request.query_params.get('week', None)
+        
+        # Default to current year/month if not provided
+        if not year:
+            year = timezone.now().year
+        if not month:
+            month = timezone.now().month
+        
+        try:
+            year = int(year)
+            month = int(month) if month else None
+            week = int(week) if week else None
+        except ValueError:
+            return Response({'error': 'Invalid year/month/week format'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Build date range based on view type
+        if week and month and year:
+            # Week view - calculate week start from month start
+            month_start = datetime(year, month, 1).date()
+            # Find first Monday of the month or before
+            days_since_monday = month_start.weekday()
+            first_monday = month_start - timedelta(days=days_since_monday)
+            # Calculate the week start (week 1, 2, 3, 4, etc.)
+            week_start = first_monday + timedelta(weeks=week-1)
+            week_end = week_start + timedelta(days=6)
+            date_range = (week_start, week_end)
+        elif month and year:
+            # Month view
+            start_date = datetime(year, month, 1).date()
+            last_day = monthrange(year, month)[1]
+            end_date = datetime(year, month, last_day).date()
+            date_range = (start_date, end_date)
+        elif year:
+            # Year view
+            start_date = datetime(year, 1, 1).date()
+            end_date = datetime(year, 12, 31).date()
+            date_range = (start_date, end_date)
         else:
-            return Response({'error': 'Invalid request'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Invalid parameters'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get all workouts in date range
+        workouts = Workout.objects.filter(
+            user=request.user,
+            datetime__date__gte=date_range[0],
+            datetime__date__lte=date_range[1]
+        ).order_by('datetime')
+        
+        # Build calendar data as array for easier frontend consumption
+        calendar_data = []
+        current_date = date_range[0]
+        while current_date <= date_range[1]:
+            date_str = current_date.isoformat()
+            day_workouts = workouts.filter(datetime__date=current_date)
+            
+            has_workout = day_workouts.filter(is_rest_day=False, is_done=True).exists()
+            is_rest_day = day_workouts.filter(is_rest_day=True).exists()
+            
+            calendar_data.append({
+                'date': date_str,
+                'day': current_date.day,
+                'weekday': current_date.weekday(),  # 0=Monday, 6=Sunday
+                'has_workout': has_workout,
+                'is_rest_day': is_rest_day,
+                'workout_count': day_workouts.filter(is_rest_day=False, is_done=True).count(),
+                'rest_day_count': day_workouts.filter(is_rest_day=True).count()
+            })
+            current_date += timedelta(days=1)
+        
+        return Response({
+            'calendar': calendar_data,
+            'period': {
+                'year': year,
+                'month': month,
+                'week': week,
+                'start_date': date_range[0].isoformat(),
+                'end_date': date_range[1].isoformat()
+            }
+        })
+
+class GetAvailableYearsView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """
+        GET /api/workout/years/
+        Returns list of years that have workouts.
+        """
+        years = Workout.objects.filter(
+            user=request.user
+        ).values_list('datetime__year', flat=True).distinct().order_by('-datetime__year')
+        
+        return Response({'years': list(years)})
+
+class CalendarStatsView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """
+        GET /api/workout/calendar/stats/
+        Returns stats for a given period.
+        Query params: year (required), month (optional), week (optional)
+        """
+        year = request.query_params.get('year')
+        month = request.query_params.get('month', None)
+        week = request.query_params.get('week', None)
+        
+        if not year:
+            return Response({'error': 'Year is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            year = int(year)
+            month = int(month) if month else None
+            week = int(week) if week else None
+        except ValueError:
+            return Response({'error': 'Invalid year/month/week format'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Build date range
+        if week and month:
+            # Week view - calculate week start from month start
+            month_start = datetime(year, month, 1).date()
+            days_since_monday = month_start.weekday()
+            first_monday = month_start - timedelta(days=days_since_monday)
+            week_start = first_monday + timedelta(weeks=week-1)
+            week_end = week_start + timedelta(days=6)
+            date_range = (week_start, week_end)
+            total_days = 7
+        elif month:
+            # Month view
+            start_date = datetime(year, month, 1).date()
+            last_day = monthrange(year, month)[1]
+            end_date = datetime(year, month, last_day).date()
+            date_range = (start_date, end_date)
+            total_days = last_day
+        else:
+            # Year view
+            start_date = datetime(year, 1, 1).date()
+            end_date = datetime(year, 12, 31).date()
+            date_range = (start_date, end_date)
+            total_days = 365 if year % 4 != 0 else 366  # Handle leap year
+        
+        # Get stats
+        workouts = Workout.objects.filter(
+            user=request.user,
+            datetime__date__gte=date_range[0],
+            datetime__date__lte=date_range[1]
+        )
+        
+        total_workouts = workouts.filter(is_rest_day=False, is_done=True).count()
+        total_rest_days = workouts.filter(is_rest_day=True).count()
+        
+        # Count unique days with workouts (excluding rest days)
+        days_with_workouts = workouts.filter(
+            is_rest_day=False,
+            is_done=True
+        ).values_list('datetime__date', flat=True).distinct().count()
+        
+        days_not_worked = total_days - days_with_workouts - total_rest_days
+        
+        return Response({
+            'total_workouts': total_workouts,
+            'total_rest_days': total_rest_days,
+            'days_not_worked': max(0, days_not_worked),  # Ensure non-negative
+            'total_days': total_days,
+            'period': {
+                'year': year,
+                'month': month,
+                'week': week,
+                'start_date': date_range[0].isoformat(),
+                'end_date': date_range[1].isoformat()
+            }
+        })
 
 class TotalWorkoutsPerformedView(APIView):
     permission_classes = [IsAuthenticated]

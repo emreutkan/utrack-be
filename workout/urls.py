@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import CreateWorkoutView, AddExerciseToWorkoutView, AddExerciseSetToWorkoutExerciseView, GetWorkoutView, GetActiveWorkoutView, DeleteExerciseSetView, DeleteWorkoutExerciseView, UpdateExerciseOrderView, CompleteWorkoutView, DeleteWorkoutView, CheckTodayRestDayView, CreateTemplateWorkoutView, GetTemplateWorkoutsView, StartTemplateWorkoutView, UpdateWorkoutView, UpdateExerciseSetView, GetRestTimerStateView
+from .views import CreateWorkoutView, AddExerciseToWorkoutView, AddExerciseSetToWorkoutExerciseView, GetWorkoutView, GetActiveWorkoutView, DeleteExerciseSetView, DeleteWorkoutExerciseView, UpdateExerciseOrderView, CompleteWorkoutView, DeleteWorkoutView, CheckTodayRestDayView, CreateTemplateWorkoutView, GetTemplateWorkoutsView, StartTemplateWorkoutView, UpdateWorkoutView, UpdateExerciseSetView, GetRestTimerStateView, CalendarView, GetAvailableYearsView, CalendarStatsView
 urlpatterns = [
     path('create/', CreateWorkoutView.as_view(), name='create-workout'),
     path('list/', GetWorkoutView.as_view(), name='list-workouts'),
@@ -8,6 +8,10 @@ urlpatterns = [
     path('active/', GetActiveWorkoutView.as_view(), name='get-active-workout'),
     path('active/rest-timer/', GetRestTimerStateView.as_view(), name='rest-timer-state'),
     path('list/<int:workout_id>/', GetWorkoutView.as_view(), name='get-workout'),
+    # Calendar endpoints
+    path('calendar/', CalendarView.as_view(), name='calendar-view'),
+    path('calendar/stats/', CalendarStatsView.as_view(), name='calendar-stats'),
+    path('years/', GetAvailableYearsView.as_view(), name='available-years'),
     path('set/<int:set_id>/update/', UpdateExerciseSetView.as_view(), name='update-set'),
     path('set/<int:set_id>/delete/', DeleteExerciseSetView.as_view(), name='delete-set'),
     path('exercise/<int:workout_exercise_id>/delete/', DeleteWorkoutExerciseView.as_view(), name='delete-workout-exercise'),

@@ -144,12 +144,45 @@ class GetWorkoutSerializer(serializers.ModelSerializer):
     # Note: 'workoutexercise_set' is the default related name. 
     # If you want it to be called 'exercises', you can rename it in the SerializerField
     exercises = WorkoutExerciseSerializer(source='workoutexercise_set', many=True, read_only=True)
-
+    total_volume = serializers.SerializerMethodField()
+    primary_muscles_worked = serializers.SerializerMethodField()
+    secondary_muscles_worked = serializers.SerializerMethodField()
 
     class Meta:
         model = Workout
-        fields = ['id', 'title', 'datetime', 'duration', 'intensity', 'notes', 'is_done', 'is_rest_day', 'created_at', 'updated_at', 'exercises'] # Add 'exercises'
+        fields = ['id', 'title', 'datetime', 'duration', 'intensity', 'notes', 'is_done', 'is_rest_day', 'created_at', 'updated_at', 'exercises', 'total_volume', 'primary_muscles_worked', 'secondary_muscles_worked']
         read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def get_total_volume(self, obj):
+        """Calculate total volume (sum of weight * reps for all sets)"""
+        total = 0
+        workout_exercises = WorkoutExercise.objects.filter(workout=obj).prefetch_related('sets')
+        for workout_exercise in workout_exercises:
+            for exercise_set in workout_exercise.sets.all():
+                total += float(exercise_set.weight) * exercise_set.reps
+        return round(total, 2)
+    
+    def get_primary_muscles_worked(self, obj):
+        """Get unique primary muscle groups from all exercises"""
+        workout_exercises = WorkoutExercise.objects.filter(workout=obj).select_related('exercise')
+        primary_muscles = set()
+        for workout_exercise in workout_exercises:
+            exercise = workout_exercise.exercise
+            if exercise and exercise.primary_muscle:
+                primary_muscles.add(exercise.primary_muscle)
+        return sorted(list(primary_muscles))
+    
+    def get_secondary_muscles_worked(self, obj):
+        """Get unique secondary muscle groups from all exercises"""
+        workout_exercises = WorkoutExercise.objects.filter(workout=obj).select_related('exercise')
+        secondary_muscles = set()
+        for workout_exercise in workout_exercises:
+            exercise = workout_exercise.exercise
+            if exercise and exercise.secondary_muscles:
+                for muscle in exercise.secondary_muscles:
+                    if muscle:
+                        secondary_muscles.add(muscle)
+        return sorted(list(secondary_muscles))
 
 class TemplateWorkoutExerciseSerializer(serializers.ModelSerializer):
     exercise = ExerciseSerializer(read_only=True)
