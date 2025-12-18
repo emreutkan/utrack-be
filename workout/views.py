@@ -5,9 +5,87 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
 from datetime import datetime, time
-from .serializers import CreateWorkoutSerializer, WorkoutExerciseSerializer, ExerciseSetSerializer, GetWorkoutSerializer, CreateTemplateWorkoutSerializer, GetTemplateWorkoutSerializer # Import GetWorkoutSerializer
+from .serializers import CreateWorkoutSerializer, WorkoutExerciseSerializer, ExerciseSetSerializer, GetWorkoutSerializer, UpdateWorkoutSerializer, CreateTemplateWorkoutSerializer, GetTemplateWorkoutSerializer # Import GetWorkoutSerializer
 from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise
 from exercise.models import Exercise
+
+def calculate_rest_status(elapsed_seconds, category):
+    """
+    Calculate rest status based on elapsed time and exercise category.
+    Returns status object with text, color, and goals.
+    """
+    is_compound = category and category.lower() == 'compound'
+    
+    # Thresholds in seconds
+    phase1_limit = 90 if is_compound else 60  # Red light limit
+    phase2_limit = 180 if is_compound else 90  # Yellow light limit
+    
+    if elapsed_seconds < phase1_limit:
+        return {
+            "text": "Rest",
+            "color": "#FF3B30",
+            "goal": phase1_limit,
+            "max_goal": phase2_limit
+        }
+    elif elapsed_seconds < phase2_limit:
+        return {
+            "text": "Recharging...",
+            "color": "#FF9F0A",
+            "goal": phase2_limit,
+            "max_goal": phase2_limit
+        }
+    else:
+        return {
+            "text": "Ready to Go!",
+            "color": "#34C759",
+            "goal": phase2_limit,
+            "max_goal": phase2_limit
+        }
+
+def get_rest_timer_state(workout):
+    """
+    Get rest timer state for active workout.
+    Returns last set timestamp and exercise category.
+    """
+    if not workout or workout.is_done:
+        return {
+            "last_set_timestamp": None,
+            "last_exercise_category": None,
+            "elapsed_seconds": 0
+        }
+    
+    # Find the most recent set across all exercises in the workout
+    last_set = ExerciseSet.objects.filter(
+        workout_exercise__workout=workout
+    ).select_related(
+        'workout_exercise',
+        'workout_exercise__exercise'
+    ).order_by('-created_at', '-id').first()
+    
+    if not last_set:
+        return {
+            "last_set_timestamp": None,
+            "last_exercise_category": None,
+            "elapsed_seconds": 0
+        }
+    
+    # Get the exercise category from the workout exercise
+    exercise = last_set.workout_exercise.exercise
+    category = exercise.category if exercise and exercise.category else 'isolation'
+    
+    # Calculate elapsed time
+    now = timezone.now()
+    elapsed_seconds = int((now - last_set.created_at).total_seconds())
+    
+    # Determine rest status
+    rest_status = calculate_rest_status(elapsed_seconds, category)
+    
+    return {
+        "last_set_timestamp": last_set.created_at.isoformat(),
+        "last_exercise_category": category,
+        "elapsed_seconds": elapsed_seconds,
+        "rest_status": rest_status
+    }
 
 # Create your views here.
 
@@ -206,6 +284,22 @@ class AddExerciseSetToWorkoutExerciseView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+class UpdateExerciseSetView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, set_id):
+        try:
+            # Ensure the set belongs to a workout owned by the user
+            exercise_set = ExerciseSet.objects.get(id=set_id, workout_exercise__workout__user=request.user)
+            
+            serializer = ExerciseSetSerializer(exercise_set, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except ExerciseSet.DoesNotExist:
+            return Response({'error': 'Set not found'}, status=status.HTTP_404_NOT_FOUND)
+
 class DeleteExerciseSetView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -285,6 +379,58 @@ class CompleteWorkoutView(APIView):
             workout.save()
             
             return Response(GetWorkoutSerializer(workout).data, status=status.HTTP_200_OK)
+        except Workout.DoesNotExist:
+            return Response({'error': 'Workout not found'}, status=status.HTTP_404_NOT_FOUND)
+
+class UpdateWorkoutView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, workout_id):
+        try:
+            workout = Workout.objects.get(id=workout_id, user=request.user)
+            
+            # If updating datetime, check for conflicts with active workout
+            if 'date' in request.data and not workout.is_done:
+                # If making an active workout into a past workout, check for conflicts
+                workout_datetime_str = request.data.get('date')
+                if workout_datetime_str:
+                    try:
+                        if 'T' in workout_datetime_str:
+                            if workout_datetime_str.endswith('Z'):
+                                new_datetime = datetime.fromisoformat(workout_datetime_str.replace('Z', '+00:00'))
+                            else:
+                                new_datetime = datetime.fromisoformat(workout_datetime_str)
+                            if timezone.is_naive(new_datetime):
+                                new_datetime = timezone.make_aware(new_datetime)
+                        else:
+                            from django.utils.dateparse import parse_date
+                            workout_date = parse_date(workout_datetime_str)
+                            if workout_date:
+                                new_datetime = timezone.make_aware(datetime.combine(workout_date, time.min))
+                            else:
+                                raise ValueError("Invalid date format")
+                        
+                        # Check if new datetime conflicts with rest day
+                        new_date = new_datetime.date()
+                        existing_rest_day = Workout.objects.filter(
+                            user=request.user,
+                            datetime__date=new_date,
+                            is_rest_day=True
+                        ).exclude(id=workout_id).first()
+                        
+                        if existing_rest_day:
+                            return Response({
+                                'error': 'REST_DAY_EXISTS_FOR_DATE',
+                                'message': f'A rest day already exists for {new_date}. Cannot update workout to this date.'
+                            }, status=status.HTTP_400_BAD_REQUEST)
+                    except (ValueError, TypeError):
+                        pass
+            
+            serializer = UpdateWorkoutSerializer(workout, data=request.data, partial=True)
+            if serializer.is_valid():
+                updated_workout = serializer.save()
+                return Response(GetWorkoutSerializer(updated_workout).data, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Workout.DoesNotExist:
             return Response({'error': 'Workout not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -433,5 +579,37 @@ class StartTemplateWorkoutView(APIView):
         # Return the created workout
         serializer = GetWorkoutSerializer(workout)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+class GetRestTimerStateView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """
+        GET /api/workout/active/rest-timer/
+        Returns rest timer state for user's active workout.
+        """
+        try:
+            # Get active workout
+            workout = Workout.objects.filter(
+                user=request.user,
+                is_done=False
+            ).first()
+            
+            if not workout:
+                return Response({
+                    "last_set_timestamp": None,
+                    "last_exercise_category": None,
+                    "elapsed_seconds": 0
+                })
+            
+            # Get rest timer state
+            state = get_rest_timer_state(workout)
+            return Response(state)
+            
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     

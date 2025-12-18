@@ -3,6 +3,7 @@ from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, Temp
 from django.utils import timezone
 from datetime import datetime
 from exercise.serializers import ExerciseSerializer
+from exercise.models import Exercise
 
 class CreateWorkoutSerializer(serializers.ModelSerializer):
     workout_date = serializers.DateTimeField(required=False, write_only=True)  # Accept datetime
@@ -97,17 +98,46 @@ class ExerciseSetSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
 class WorkoutExerciseSerializer(serializers.ModelSerializer):
-    # This nested serializer will fetch the full exercise details
-    # instead of just the ID.
-    exercise = ExerciseSerializer(read_only=True)
+    # Accept exercise as ID when writing, return full object when reading
+    exercise = serializers.PrimaryKeyRelatedField(queryset=Exercise.objects.all())
     # Add this line to fetch related sets
     sets = ExerciseSetSerializer(many=True, read_only=True) 
     
     class Meta:
         model = WorkoutExercise
-        # Now 'exercise' field will contain the full object: { "id": 1, "name": "Bench Press", ... }
         fields = ['id', 'workout', 'exercise', 'order', 'sets']
         read_only_fields = ['id']
+    
+    def to_representation(self, instance):
+        # Override to return full exercise object instead of just ID
+        representation = super().to_representation(instance)
+        # Replace exercise ID with full exercise object
+        if instance.exercise:
+            representation['exercise'] = ExerciseSerializer(instance.exercise).data
+        return representation
+
+class UpdateWorkoutSerializer(serializers.ModelSerializer):
+    date = serializers.DateTimeField(required=False, write_only=True)  # Accept datetime for updating
+    
+    class Meta:
+        model = Workout
+        fields = ['id', 'title', 'date', 'duration', 'intensity', 'notes', 'is_done']
+        read_only_fields = ['id']
+    
+    def update(self, instance, validated_data):
+        # Handle datetime update if provided
+        workout_datetime = validated_data.pop('date', None)
+        if workout_datetime:
+            # If it's a naive datetime, make it timezone-aware
+            if timezone.is_naive(workout_datetime):
+                workout_datetime = timezone.make_aware(workout_datetime)
+            validated_data['datetime'] = workout_datetime
+        
+        # Update workout fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
 
 class GetWorkoutSerializer(serializers.ModelSerializer):
     # Add this field to fetch related exercises
