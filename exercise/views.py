@@ -8,22 +8,36 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from workout.models import Workout, WorkoutExercise
-# Create your views here.
+from django.core.cache import cache
+from rest_framework.pagination import PageNumberPagination
+
+class ExercisePagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 200
 
 class ExerciseListView(APIView):
     permission_classes = [IsAuthenticated]
+    pagination_class = ExercisePagination
     queryset = Exercise.objects.all()
     serializer_class = ExerciseSerializer
 
-    @method_decorator(cache_page(60*15))
     def get(self, request):
         query = request.query_params.get('search', None)
-        if query:
-            exercises = Exercise.objects.filter(name__icontains=query)
-        else:
-            exercises = Exercise.objects.all()
-        serializer = ExerciseSerializer(exercises, many=True)
-        return Response(serializer.data)
+        cache_key = f'exercises_list_{query or "all"}'
+        
+        # Cache globally (same for all users) - exercises don't change per user
+        exercises_data = cache.get(cache_key)
+        if exercises_data is None:
+            if query:
+                exercises = Exercise.objects.filter(name__icontains=query, is_active=True)
+            else:
+                exercises = Exercise.objects.filter(is_active=True)
+            serializer = ExerciseSerializer(exercises, many=True)
+            exercises_data = serializer.data
+            cache.set(cache_key, exercises_data, 60*60)  # 1 hour cache
+        
+        return Response(exercises_data)
         
 class addExerciseToWorkoutView(APIView):
     permission_classes = [IsAuthenticated]

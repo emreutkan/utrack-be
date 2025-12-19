@@ -8,9 +8,12 @@ from datetime import datetime, time, timedelta
 from django.db.models import Q
 from django.db import models
 from calendar import monthrange
-from .serializers import CreateWorkoutSerializer, WorkoutExerciseSerializer, ExerciseSetSerializer, GetWorkoutSerializer, UpdateWorkoutSerializer, CreateTemplateWorkoutSerializer, GetTemplateWorkoutSerializer, TrainingResearchSerializer # Import GetWorkoutSerializer
-from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise, TrainingResearch
+from .serializers import CreateWorkoutSerializer, WorkoutExerciseSerializer, ExerciseSetSerializer, GetWorkoutSerializer, UpdateWorkoutSerializer, CreateTemplateWorkoutSerializer, GetTemplateWorkoutSerializer, TrainingResearchSerializer, MuscleRecoverySerializer # Import GetWorkoutSerializer
+from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise, TrainingResearch, MuscleRecovery
 from exercise.models import Exercise
+from django.core.cache import cache
+from django.views.decorators.vary import vary_on_headers
+from rest_framework.pagination import PageNumberPagination
 
 def calculate_rest_status(elapsed_seconds, category):
     """
@@ -69,6 +72,29 @@ def calculate_workout_calories(workout):
     Returns: Total calories burned (float)
     """
     return workout.calculate_calories()
+
+def recalculate_workout_metrics(workout):
+    """
+    Recalculate calories and muscle recovery for a completed workout.
+    Only runs if workout is done and not a rest day.
+    Also recalculates if workout was completed in the last 4 days (for editing scenarios).
+    """
+    if workout.is_done and not workout.is_rest_day:
+        # Check if workout was done in the last 4 days
+        workout_datetime = workout.datetime or workout.created_at
+        time_diff = timezone.now() - workout_datetime
+        days_since_workout = time_diff.days
+        
+        # Recalculate if workout is done and within last 4 days (96 hours)
+        # This handles editing scenarios where workout was done recently
+        if days_since_workout <= 4 and time_diff.total_seconds() >= 0:
+            # Recalculate calories
+            calories_burned = calculate_workout_calories(workout)
+            workout.calories_burned = calories_burned
+            workout.save(update_fields=['calories_burned'])
+            
+            # Recalculate muscle recovery
+            workout.calculate_muscle_recovery()
 
 def calculate_workout_exercise_1rm(workout_exercise):
     """
@@ -246,24 +272,63 @@ class CreateWorkoutView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-class GetWorkoutView(APIView):
+class WorkoutPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
+class GetWorkoutView(APIView):
     permission_classes = [IsAuthenticated]
+    pagination_class = WorkoutPagination
     
     def get(self, request, workout_id=None):
         if workout_id:
-            # Get specific workout
+            # Get specific workout with optimized queries
             try:
-                workout = Workout.objects.get(id=workout_id, user=request.user)
+                workout = Workout.objects.select_related('user').prefetch_related(
+                    'workoutexercise_set__exercise',
+                    'workoutexercise_set__sets'
+                ).get(id=workout_id, user=request.user)
                 serializer = GetWorkoutSerializer(workout)
                 return Response(serializer.data)
             except Workout.DoesNotExist:
                 return Response({'error': 'Workout not found'}, status=status.HTTP_404_NOT_FOUND)
         else:
-            # Get all workouts (only completed ones, exclude rest days)
-            workouts = Workout.objects.filter(user=request.user, is_done=True, is_rest_day=False).order_by('-created_at')
-            serializer = GetWorkoutSerializer(workouts, many=True)
-            return Response(serializer.data)
+            # Get pagination params
+            page = int(request.query_params.get('page', 1))
+            page_size = request.query_params.get('page_size', 20)
+            
+            # Only cache first page (most common case) to limit memory usage
+            # 200 users = 200 cache entries max instead of 200+ per page
+            should_cache = page == 1
+            
+            if should_cache:
+                cache_key = f'workouts_list_user_{request.user.id}_page_1_size_{page_size}'
+                cached_response = cache.get(cache_key)
+                if cached_response is not None:
+                    return Response(cached_response)
+            
+            # Get all workouts with pagination and optimized queries
+            workouts = Workout.objects.filter(
+                user=request.user, 
+                is_done=True, 
+                is_rest_day=False
+            ).select_related('user').prefetch_related(
+                'workoutexercise_set__exercise',
+                'workoutexercise_set__sets'
+            ).order_by('-created_at')
+            
+            # Paginate
+            paginator = self.pagination_class()
+            paginated_workouts = paginator.paginate_queryset(workouts, request)
+            serializer = GetWorkoutSerializer(paginated_workouts, many=True)
+            paginated_response = paginator.get_paginated_response(serializer.data)
+            
+            # Only cache first page to limit memory usage
+            if should_cache:
+                cache.set(cache_key, paginated_response.data, 300)  # 5 minutes
+            
+            return paginated_response
         
 
 
@@ -333,6 +398,11 @@ class AddExerciseSetToWorkoutExerciseView(APIView):
         serializer = ExerciseSetSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
+            
+            # Recalculate recovery if workout is completed
+            workout = workout_exercise.workout
+            recalculate_workout_metrics(workout)
+            
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -347,6 +417,11 @@ class UpdateExerciseSetView(APIView):
             serializer = ExerciseSetSerializer(exercise_set, data=request.data, partial=True)
             if serializer.is_valid():
                 serializer.save()
+                
+                # Recalculate recovery if workout is completed
+                workout = exercise_set.workout_exercise.workout
+                recalculate_workout_metrics(workout)
+                
                 return Response(serializer.data, status=status.HTTP_200_OK)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except ExerciseSet.DoesNotExist:
@@ -359,7 +434,12 @@ class DeleteExerciseSetView(APIView):
         try:
             # Ensure the set belongs to a workout owned by the user
             exercise_set = ExerciseSet.objects.get(id=set_id, workout_exercise__workout__user=request.user)
+            workout = exercise_set.workout_exercise.workout
             exercise_set.delete()
+            
+            # Recalculate recovery if workout is completed
+            recalculate_workout_metrics(workout)
+            
             return Response(status=status.HTTP_204_NO_CONTENT)
         except ExerciseSet.DoesNotExist:
             return Response({'error': 'Set not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -379,6 +459,9 @@ class DeleteWorkoutExerciseView(APIView):
             for exercise in WorkoutExercise.objects.filter(workout=current_workout, order__gt=workout_exercise_order):
                 exercise.order = exercise.order - 1
                 exercise.save()
+            
+            # Recalculate recovery if workout is completed
+            recalculate_workout_metrics(current_workout)
             return Response(status=status.HTTP_204_NO_CONTENT)
         except WorkoutExercise.DoesNotExist:
             return Response({'error': 'Exercise not found in workout'}, status=status.HTTP_404_NOT_FOUND)
@@ -437,10 +520,8 @@ class CompleteWorkoutView(APIView):
                     workout_exercise.one_rep_max = one_rm
                     workout_exercise.save()
             
-            # Calculate calories burned
-            calories_burned = calculate_workout_calories(workout)
-            workout.calories_burned = calories_burned
-            workout.save()
+            # Calculate calories and recovery
+            recalculate_workout_metrics(workout)
 
             return Response(GetWorkoutSerializer(workout).data, status=status.HTTP_200_OK)
         except Workout.DoesNotExist:
@@ -493,6 +574,10 @@ class UpdateWorkoutView(APIView):
             serializer = UpdateWorkoutSerializer(workout, data=request.data, partial=True)
             if serializer.is_valid():
                 updated_workout = serializer.save()
+                
+                # Recalculate calories and recovery if workout is completed
+                recalculate_workout_metrics(updated_workout)
+                
                 return Response(GetWorkoutSerializer(updated_workout).data, status=status.HTTP_200_OK)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         except Workout.DoesNotExist:
@@ -1159,5 +1244,40 @@ class GetRelevantResearchView(APIView):
         
         serializer = TrainingResearchSerializer(research.order_by('-priority', '-confidence_score'), many=True)
         return Response(serializer.data)
+
+class GetMuscleRecoveryStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """
+        Get current recovery status for all muscle groups.
+        Returns the most recent recovery record for each muscle group.
+        """
+        # Get all unique muscle groups
+        from exercise.models import Exercise
+        all_muscle_groups = [choice[0] for choice in Exercise.MUSCLE_GROUPS]
+        
+        # Get the most recent recovery record for each muscle group
+        recovery_status = {}
+        
+        # Instead of looping, do one query with aggregation
+        recovery_records = MuscleRecovery.objects.filter(
+            user=request.user,
+            muscle_group__in=all_muscle_groups
+        ).select_related('source_workout').order_by(
+            'muscle_group',
+            '-source_workout__datetime',
+            '-recovery_until'
+        ).distinct('muscle_group')  # Get latest per muscle group
+
+        for record in recovery_records:
+            # Update recovery status
+            record.update_recovery_status()
+            recovery_status[record.muscle_group] = MuscleRecoverySerializer(record).data
+        
+        return Response({
+            'recovery_status': recovery_status,
+            'timestamp': timezone.now().isoformat()
+        }, status=status.HTTP_200_OK)
 
     

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise, TrainingResearch
+from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise, TrainingResearch, MuscleRecovery
 from django.utils import timezone
 from datetime import datetime
 from exercise.serializers import ExerciseSerializer
@@ -156,17 +156,17 @@ class GetWorkoutSerializer(serializers.ModelSerializer):
     def get_total_volume(self, obj):
         """Calculate total volume (sum of weight * reps for all sets)"""
         total = 0
-        workout_exercises = WorkoutExercise.objects.filter(workout=obj).prefetch_related('sets')
-        for workout_exercise in workout_exercises:
+        # Use prefetched data instead of new query
+        for workout_exercise in obj.workoutexercise_set.all():
             for exercise_set in workout_exercise.sets.all():
                 total += float(exercise_set.weight) * exercise_set.reps
         return round(total, 2)
     
     def get_primary_muscles_worked(self, obj):
         """Get unique primary muscle groups from all exercises"""
-        workout_exercises = WorkoutExercise.objects.filter(workout=obj).select_related('exercise')
+        # Use prefetched data instead of new query
         primary_muscles = set()
-        for workout_exercise in workout_exercises:
+        for workout_exercise in obj.workoutexercise_set.all():
             exercise = workout_exercise.exercise
             if exercise and exercise.primary_muscle:
                 primary_muscles.add(exercise.primary_muscle)
@@ -174,9 +174,9 @@ class GetWorkoutSerializer(serializers.ModelSerializer):
     
     def get_secondary_muscles_worked(self, obj):
         """Get unique secondary muscle groups from all exercises"""
-        workout_exercises = WorkoutExercise.objects.filter(workout=obj).select_related('exercise')
+        # Use prefetched data instead of new query
         secondary_muscles = set()
-        for workout_exercise in workout_exercises:
+        for workout_exercise in obj.workoutexercise_set.all():
             exercise = workout_exercise.exercise
             if exercise and exercise.secondary_muscles:
                 for muscle in exercise.secondary_muscles:
@@ -272,3 +272,41 @@ class TrainingResearchSerializer(serializers.ModelSerializer):
             'priority', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+class MuscleRecoverySerializer(serializers.ModelSerializer):
+    hours_until_recovery = serializers.SerializerMethodField()
+    recovery_percentage = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = MuscleRecovery
+        fields = [
+            'id', 'muscle_group', 'fatigue_score', 'total_sets',
+            'recovery_hours', 'recovery_until', 'is_recovered',
+            'source_workout', 'hours_until_recovery', 'recovery_percentage',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def get_hours_until_recovery(self, obj):
+        """Calculate hours remaining until recovery"""
+        if obj.recovery_until and not obj.is_recovered:
+            delta = obj.recovery_until - timezone.now()
+            if delta.total_seconds() > 0:
+                return round(delta.total_seconds() / 3600, 1)
+        return 0
+    
+    def get_recovery_percentage(self, obj):
+        """Calculate recovery percentage (0-100)"""
+        if not obj.recovery_until or obj.is_recovered:
+            return 100
+        
+        # Calculate percentage based on time elapsed
+        workout_time = obj.source_workout.datetime if obj.source_workout else obj.created_at
+        total_duration = obj.recovery_until - workout_time
+        elapsed = timezone.now() - workout_time
+        
+        if total_duration.total_seconds() <= 0:
+            return 100
+        
+        percentage = (elapsed.total_seconds() / total_duration.total_seconds()) * 100
+        return min(100, max(0, round(percentage, 1)))
