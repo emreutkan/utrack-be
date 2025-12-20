@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import CreateWorkoutView, AddExerciseToWorkoutView, AddExerciseSetToWorkoutExerciseView, GetWorkoutView, GetActiveWorkoutView, DeleteExerciseSetView, DeleteWorkoutExerciseView, UpdateExerciseOrderView, CompleteWorkoutView, DeleteWorkoutView, CheckTodayRestDayView, CheckWorkoutPerformedTodayView, CreateTemplateWorkoutView, GetTemplateWorkoutsView, StartTemplateWorkoutView, UpdateWorkoutView, UpdateExerciseSetView, GetRestTimerStateView, CalendarView, GetAvailableYearsView, CalendarStatsView, GetExercise1RMHistoryView, GetRecoveryRecommendationsView, GetRestPeriodRecommendationsView, GetTrainingFrequencyRecommendationsView, GetRelevantResearchView, GetMuscleRecoveryStatusView
+from .views import CreateWorkoutView, AddExerciseToWorkoutView, AddExerciseSetToWorkoutExerciseView, GetWorkoutView, GetActiveWorkoutView, DeleteExerciseSetView, DeleteWorkoutExerciseView, UpdateExerciseOrderView, CompleteWorkoutView, DeleteWorkoutView, CheckTodayRestDayView, CheckWorkoutPerformedTodayView, CreateTemplateWorkoutView, GetTemplateWorkoutsView, StartTemplateWorkoutView, UpdateWorkoutView, UpdateExerciseSetView, GetRestTimerStateView, CalendarView, GetAvailableYearsView, CalendarStatsView, GetExercise1RMHistoryView, GetRecoveryRecommendationsView, GetRestPeriodRecommendationsView, GetTrainingFrequencyRecommendationsView, GetRelevantResearchView, GetMuscleRecoveryStatusView, VolumeAnalysisView
 urlpatterns = [
     path('create/', CreateWorkoutView.as_view(), name='create-workout'),
     path('list/', GetWorkoutView.as_view(), name='list-workouts'),
@@ -20,6 +20,7 @@ urlpatterns = [
     path('recommendations/frequency/', GetTrainingFrequencyRecommendationsView.as_view(), name='frequency-recommendations'),
     path('research/', GetRelevantResearchView.as_view(), name='relevant-research'),
     path('recovery/status/', GetMuscleRecoveryStatusView.as_view(), name='muscle-recovery-status'),
+    path('volume-analysis/', VolumeAnalysisView.as_view(), name='volume-analysis'),
     path('set/<int:set_id>/update/', UpdateExerciseSetView.as_view(), name='update-set'),
     path('set/<int:set_id>/delete/', DeleteExerciseSetView.as_view(), name='delete-set'),
     path('exercise/<int:workout_exercise_id>/delete/', DeleteWorkoutExerciseView.as_view(), name='delete-workout-exercise'),

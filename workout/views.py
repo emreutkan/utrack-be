@@ -5,15 +5,20 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
 from datetime import datetime, time, timedelta
-from django.db.models import Q
+from django.db.models import Q, Max, Sum, Count
 from django.db import models
 from calendar import monthrange
+from collections import defaultdict
+import logging
 from .serializers import CreateWorkoutSerializer, WorkoutExerciseSerializer, ExerciseSetSerializer, GetWorkoutSerializer, UpdateWorkoutSerializer, CreateTemplateWorkoutSerializer, GetTemplateWorkoutSerializer, TrainingResearchSerializer, MuscleRecoverySerializer # Import GetWorkoutSerializer
 from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise, TrainingResearch, MuscleRecovery
 from exercise.models import Exercise
 from django.core.cache import cache
 from django.views.decorators.vary import vary_on_headers
 from rest_framework.pagination import PageNumberPagination
+
+# Get logger for this module
+logger = logging.getLogger('workout')
 
 def calculate_rest_status(elapsed_seconds, category):
     """
@@ -290,9 +295,14 @@ class GetWorkoutView(APIView):
                     'workoutexercise_set__sets'
                 ).get(id=workout_id, user=request.user)
                 serializer = GetWorkoutSerializer(workout)
+                logger.info(f"User {request.user.email} retrieved workout {workout_id}")
                 return Response(serializer.data)
             except Workout.DoesNotExist:
+                logger.warning(f"User {request.user.email} attempted to access non-existent workout {workout_id}")
                 return Response({'error': 'Workout not found'}, status=status.HTTP_404_NOT_FOUND)
+            except Exception as e:
+                logger.error(f"Error retrieving workout {workout_id} for user {request.user.email}: {str(e)}", exc_info=True)
+                return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         else:
             # Get pagination params
             page = int(request.query_params.get('page', 1))
@@ -1260,15 +1270,23 @@ class GetMuscleRecoveryStatusView(APIView):
         # Get the most recent recovery record for each muscle group
         recovery_status = {}
         
-        # Instead of looping, do one query with aggregation
-        recovery_records = MuscleRecovery.objects.filter(
+        # SQLite-compatible approach: fetch all records, order by datetime, then group in Python
+        all_records = MuscleRecovery.objects.filter(
             user=request.user,
             muscle_group__in=all_muscle_groups
         ).select_related('source_workout').order_by(
             'muscle_group',
             '-source_workout__datetime',
             '-recovery_until'
-        ).distinct('muscle_group')  # Get latest per muscle group
+        )
+        
+        # Group by muscle_group and take the first (most recent) for each
+        seen_groups = set()
+        recovery_records = []
+        for record in all_records:
+            if record.muscle_group not in seen_groups:
+                recovery_records.append(record)
+                seen_groups.add(record.muscle_group)
 
         for record in recovery_records:
             # Update recovery status
@@ -1278,6 +1296,177 @@ class GetMuscleRecoveryStatusView(APIView):
         return Response({
             'recovery_status': recovery_status,
             'timestamp': timezone.now().isoformat()
+        }, status=status.HTTP_200_OK)
+
+class VolumeAnalysisView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """
+        GET /api/workout/volume-analysis/
+        Analyzes volume per muscle group per week.
+        
+        Query params:
+        - weeks_back (optional): Number of weeks to analyze (default: 12)
+        - start_date (optional): Start date in YYYY-MM-DD format
+        - end_date (optional): End date in YYYY-MM-DD format
+        """
+        # Get query parameters
+        weeks_back = request.query_params.get('weeks_back', 12)
+        start_date_param = request.query_params.get('start_date', None)
+        end_date_param = request.query_params.get('end_date', None)
+        
+        try:
+            weeks_back = int(weeks_back)
+        except ValueError:
+            weeks_back = 12
+        
+        # Calculate date range
+        if start_date_param and end_date_param:
+            try:
+                start_date = datetime.strptime(start_date_param, '%Y-%m-%d').date()
+                end_date = datetime.strptime(end_date_param, '%Y-%m-%d').date()
+            except ValueError:
+                return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            # Default to last N weeks
+            end_date = timezone.now().date()
+            # Get Monday of the current week
+            days_since_monday = end_date.weekday()
+            current_monday = end_date - timedelta(days=days_since_monday)
+            # Go back N weeks from current Monday
+            start_date = current_monday - timedelta(weeks=weeks_back)
+        
+        # Get all completed workouts in date range (excluding rest days)
+        workouts = Workout.objects.filter(
+            user=request.user,
+            is_done=True,
+            is_rest_day=False,
+            datetime__date__gte=start_date,
+            datetime__date__lte=end_date
+        ).select_related().prefetch_related(
+            'workoutexercise_set__exercise',
+            'workoutexercise_set__sets'
+        ).order_by('datetime')
+        
+        # Dictionary to store volume data: {week_start: {muscle_group: {volume, sets, workouts}}}
+        volume_data = defaultdict(lambda: defaultdict(lambda: {'total_volume': 0.0, 'sets': 0, 'workouts': set()}))
+        
+        # Get all muscle groups
+        from exercise.models import Exercise
+        all_muscle_groups = [choice[0] for choice in Exercise.MUSCLE_GROUPS]
+        
+        # Process each workout
+        for workout in workouts:
+            workout_date = workout.datetime.date() if workout.datetime else workout.created_at.date()
+            
+            # Calculate Monday of the week for this workout
+            days_since_monday = workout_date.weekday()
+            week_monday = workout_date - timedelta(days=days_since_monday)
+            week_key = week_monday.isoformat()
+            
+            # Process each exercise in the workout
+            for workout_exercise in workout.workoutexercise_set.all():
+                exercise = workout_exercise.exercise
+                sets = workout_exercise.sets.all()
+                
+                # Process each set
+                for exercise_set in sets:
+                    # Skip warmup sets
+                    if exercise_set.is_warmup:
+                        continue
+                    
+                    # Calculate volume (weight × reps)
+                    weight = float(exercise_set.weight) if exercise_set.weight else 0.0
+                    reps = exercise_set.reps if exercise_set.reps else 0
+                    
+                    if weight > 0 and reps > 0:
+                        volume = weight * reps
+                        
+                        # Add to primary muscle
+                        primary_muscle = exercise.primary_muscle
+                        if primary_muscle:
+                            volume_data[week_key][primary_muscle]['total_volume'] += volume
+                            volume_data[week_key][primary_muscle]['sets'] += 1
+                            volume_data[week_key][primary_muscle]['workouts'].add(workout.id)
+                        
+                        # Add to secondary muscles (40% of volume)
+                        secondary_muscles = exercise.secondary_muscles or []
+                        for secondary_muscle in secondary_muscles:
+                            if secondary_muscle:
+                                volume_data[week_key][secondary_muscle]['total_volume'] += volume * 0.4
+                                volume_data[week_key][secondary_muscle]['sets'] += 1
+                                volume_data[week_key][secondary_muscle]['workouts'].add(workout.id)
+        
+        # Convert to response format
+        weeks_list = []
+        for week_start_str in sorted(volume_data.keys()):
+            week_start = datetime.strptime(week_start_str, '%Y-%m-%d').date()
+            week_end = week_start + timedelta(days=6)
+            
+            muscle_groups_data = {}
+            for muscle_group in all_muscle_groups:
+                if muscle_group in volume_data[week_start_str]:
+                    data = volume_data[week_start_str][muscle_group]
+                    muscle_groups_data[muscle_group] = {
+                        'total_volume': round(data['total_volume'], 2),
+                        'sets': data['sets'],
+                        'workouts': len(data['workouts'])
+                    }
+                else:
+                    muscle_groups_data[muscle_group] = {
+                        'total_volume': 0.0,
+                        'sets': 0,
+                        'workouts': 0
+                    }
+            
+            weeks_list.append({
+                'week_start': week_start_str,
+                'week_end': week_end.isoformat(),
+                'muscle_groups': muscle_groups_data
+            })
+        
+        # Calculate summary statistics
+        summary = {}
+        for muscle_group in all_muscle_groups:
+            volumes = []
+            total_sets = 0
+            total_workouts = 0
+            
+            for week_data in weeks_list:
+                mg_data = week_data['muscle_groups'][muscle_group]
+                if mg_data['total_volume'] > 0:
+                    volumes.append(mg_data['total_volume'])
+                    total_sets += mg_data['sets']
+                    total_workouts += mg_data['workouts']
+            
+            if volumes:
+                summary[muscle_group] = {
+                    'average_volume_per_week': round(sum(volumes) / len(volumes), 2),
+                    'max_volume_per_week': round(max(volumes), 2),
+                    'min_volume_per_week': round(min(volumes), 2),
+                    'total_weeks_trained': len(volumes),
+                    'total_sets': total_sets,
+                    'total_workouts': total_workouts
+                }
+            else:
+                summary[muscle_group] = {
+                    'average_volume_per_week': 0.0,
+                    'max_volume_per_week': 0.0,
+                    'min_volume_per_week': 0.0,
+                    'total_weeks_trained': 0,
+                    'total_sets': 0,
+                    'total_workouts': 0
+                }
+        
+        return Response({
+            'period': {
+                'start_date': start_date.isoformat(),
+                'end_date': end_date.isoformat(),
+                'total_weeks': len(weeks_list)
+            },
+            'weeks': weeks_list,
+            'summary': summary
         }, status=status.HTTP_200_OK)
 
     
