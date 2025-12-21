@@ -19,40 +19,37 @@ jobs:
         key: ${{ secrets.EC2_SSH_KEY }}
         script: |
           PROJECT_DIR="/home/ubuntu/utrack-backend"
-          
-          # 1. Navigate to project
           cd "$PROJECT_DIR"
           
-          # 2. Pull latest code
+          # 1. Pull latest code
           git pull origin master
           
-          # 3. Activate venv and update dependencies
+          # 2. Create .env file using Secrets
+          echo "SECRET_KEY='${{ secrets.DJANGO_SECRET_KEY }}'" > .env
+          echo "DB_NAME='${{ secrets.DB_NAME }}'" >> .env
+          echo "DB_USER='${{ secrets.DB_USER }}'" >> .env
+          echo "DB_PASSWORD='${{ secrets.DB_PASSWORD }}'" >> .env
+          echo "DB_HOST='localhost'" >> .env
+          echo "DB_PORT='5432'" >> .env
+          echo "DEBUG='False'" >> .env
+          echo "ALLOWED_HOSTS='${{ secrets.ALLOWED_HOSTS }}'" >> .env
+
+          # 3. FIX DATABASE PERMISSIONS (Automated)
+          # This grants the DB_USER permission to the public schema
+          sudo -u postgres psql -d ${{ secrets.DB_NAME }} -c "GRANT ALL ON SCHEMA public TO ${{ secrets.DB_USER }};"
+          sudo -u postgres psql -d ${{ secrets.DB_NAME }} -c "ALTER SCHEMA public OWNER TO ${{ secrets.DB_USER }};"
+
+          # 4. Setup Environment and Dependencies
           source venv/bin/activate
           pip install --upgrade pip
           pip install -r requirements.txt
           
-          # 4. Get secrets and export
-          export SECRET_KEY="${{ secrets.DJANGO_SECRET_KEY }}"
-          export DB_NAME="${{ secrets.DB_NAME }}"
-          export DB_USER="${{ secrets.DB_USER }}"
-          export DB_PASSWORD="${{ secrets.DB_PASSWORD }}"
-          export ALLOWED_HOSTS="${{ secrets.ALLOWED_HOSTS }}"
-          export DB_HOST="localhost"
-          export DB_PORT="5432"
-          export DEBUG="False"
-          
-          # Set defaults
-          DB_NAME="${DB_NAME:-utrack_db}"
-          DB_USER="${DB_USER:-utrack_user}"
-          ALLOWED_HOSTS="${ALLOWED_HOSTS:-*}"
-          
-          # 5. Run migrations
+          # 5. Load env and run Django tasks
+          export $(grep -v '^#' .env | xargs)
           python3 manage.py migrate --noinput
-          
-          # 6. Collect static files
           python3 manage.py collectstatic --noinput
           
-          # 7. Restart Gunicorn
+          # 6. Restart Gunicorn
           sudo systemctl restart utrack
           
-          echo "Deployment completed successfully!"
+          echo "✅ Deployment successful. DB Migrated and ALLOWED_HOSTS updated."
