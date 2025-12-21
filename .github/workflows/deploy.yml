@@ -36,8 +36,8 @@ jobs:
           echo "DB_PORT=5432" >> .env
           echo "DEBUG=False" >> .env
           echo "ALLOWED_HOSTS=${{ secrets.ALLOWED_HOSTS }}" >> .env
-
           sudo bash -c "cat > $SERVICE_FILE <<EOF
+          
           [Unit]
           Description=UTrack Django application
           After=network.target
