@@ -36,9 +36,20 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-mgv+8j9y@yo#6%5t__e$^
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',') if os.environ.get('ALLOWED_HOSTS') else ['*']
+ALLOWED_HOSTS = [
+    host.strip() 
+    for host in os.environ.get("ALLOWED_HOSTS", "").split(",") 
+    if host.strip()
+]
 
-
+# Fallback for production if the env var is missing or empty
+if not ALLOWED_HOSTS:
+    if DEBUG:
+        ALLOWED_HOSTS = ['*']
+    else:
+        # In production, if ALLOWED_HOSTS is empty, Django throws 400. 
+        # Add a safe default or make sure your .env is loaded.
+        ALLOWED_HOSTS = ['16.16.248.86', 'localhost', '127.0.0.1']
 # Application definition
 
 INSTALLED_APPS = [
