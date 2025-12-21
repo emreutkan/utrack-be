@@ -21,15 +21,12 @@ jobs:
         username: ${{ secrets.EC2_USER }}
         key: ${{ secrets.EC2_SSH_KEY }}
         script: |
-
           # Set variables
           PROJECT_DIR="/home/ubuntu/utrack-backend"
           REPO_URL="https://github.com/emreutkan/utrack-be"
-          
           # Install system dependencies
           sudo apt update && sudo apt upgrade -y
           sudo apt install -y python3.12 python3.12-venv python3-pip postgresql postgresql-contrib git libpq-dev python3-dev
-
           # Clone or update repository
           if [ ! -d "$PROJECT_DIR" ]; then
             echo "Cloning repository..."
@@ -40,7 +37,7 @@ jobs:
             cd "$PROJECT_DIR"
             git pull origin master
           fi
-          
+    
           # Navigate to project directory (ensure we're in the right place)
           cd "$PROJECT_DIR"
           
@@ -52,27 +49,42 @@ jobs:
             echo "Virtual environment found!"
           fi
           
-          # Setup PostgreSQL database (only on first run)
-          # Use secrets if provided, otherwise use defaults
+          # Get all secrets from GitHub
           DB_NAME="${{ secrets.DB_NAME }}"
           DB_USER="${{ secrets.DB_USER }}"
           DB_PASSWORD="${{ secrets.DB_PASSWORD }}"
+          SECRET_KEY="${{ secrets.DJANGO_SECRET_KEY }}"
+          ALLOWED_HOSTS="${{ secrets.ALLOWED_HOSTS }}"
+          DB_HOST="localhost"
+          DB_PORT="5432"
           
-          # Set defaults if secrets are not provided
-          if [ -z "$DB_NAME" ]; then
-            DB_NAME="utrack_db"
-          fi
-          if [ -z "$DB_USER" ]; then
-            DB_USER="utrack_user"
-          fi
-          
-          # DB_PASSWORD is required - fail if not provided
+          # Validate all required secrets at once
+          MISSING_SECRETS=""
           if [ -z "$DB_PASSWORD" ]; then
-            echo "ERROR: DB_PASSWORD secret is required but not set!"
+            MISSING_SECRETS="${MISSING_SECRETS}DB_PASSWORD "
+          fi
+          if [ -z "$SECRET_KEY" ]; then
+            MISSING_SECRETS="${MISSING_SECRETS}DJANGO_SECRET_KEY "
+          fi
+          
+          if [ -n "$MISSING_SECRETS" ]; then
+            echo "ERROR: Required secrets are missing: $MISSING_SECRETS"
+            echo "Please add them to your GitHub repository secrets."
             exit 1
           fi
           
-          # Check if database exists
+          # Set defaults for optional secrets
+          DB_NAME="${DB_NAME:-utrack_db}"
+          DB_USER="${DB_USER:-utrack_user}"
+          ALLOWED_HOSTS="${ALLOWED_HOSTS:-*}"
+          
+          # Activate venv and install dependencies
+          source "$PROJECT_DIR/venv/bin/activate"
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install gunicorn psycopg2-binary
+          
+          # Check if database exists and create if needed
           if ! sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
             echo "Setting up PostgreSQL database..."
             sudo -u postgres psql << EOF
@@ -87,30 +99,6 @@ jobs:
             echo "PostgreSQL database created!"
           else
             echo "PostgreSQL database already exists!"
-          fi
-          
-          # Activate venv and install dependencies first (needed for SECRET_KEY generation)
-          source "$PROJECT_DIR/venv/bin/activate"
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install gunicorn psycopg2-binary
-          
-          # Get secrets from GitHub
-          # Note: DB_HOST and DB_PORT are hardcoded since DB is on same EC2 instance
-          SECRET_KEY="${{ secrets.DJANGO_SECRET_KEY }}"
-          ALLOWED_HOSTS="${{ secrets.ALLOWED_HOSTS }}"
-          DB_HOST="localhost"  # Database is on same EC2 instance
-          DB_PORT="5432"       # Default PostgreSQL port
-          
-          # SECRET_KEY is required - fail if not provided
-          if [ -z "$SECRET_KEY" ]; then
-            echo "ERROR: DJANGO_SECRET_KEY secret is required but not set!"
-            exit 1
-          fi
-          
-          # Set default for ALLOWED_HOSTS if not provided
-          if [ -z "$ALLOWED_HOSTS" ]; then
-            ALLOWED_HOSTS="*"
           fi
           
           # Export environment variables for migrations
@@ -166,3 +154,4 @@ jobs:
           sudo systemctl restart utrack
 
           echo "Deployment completed successfully!"
+          
