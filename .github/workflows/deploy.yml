@@ -21,35 +21,35 @@ jobs:
         username: ${{ secrets.EC2_USER }}
         key: ${{ secrets.EC2_SSH_KEY }}
         script: |
-          # Set variables
+          # 1. Set variables
           PROJECT_DIR="/home/ubuntu/utrack-backend"
           REPO_URL="https://github.com/emreutkan/utrack-be"
-          # Install system dependencies
+          
+          # 2. Install system dependencies
           sudo apt update && sudo apt upgrade -y
           sudo apt install -y python3.12 python3.12-venv python3-pip postgresql postgresql-contrib git libpq-dev python3-dev
-          # Clone or update repository
+          
+          # 3. Clone or update repository
           if [ ! -d "$PROJECT_DIR" ]; then
             echo "Cloning repository..."
-            mkdir -p "$PROJECT_DIR"
+            sudo mkdir -p "$PROJECT_DIR"
+            sudo chown ubuntu:ubuntu "$PROJECT_DIR"
             git clone "$REPO_URL" "$PROJECT_DIR"
           else
             echo "Updating repository..."
             cd "$PROJECT_DIR"
             git pull origin master
           fi
-    
-          # Navigate to project directory (ensure we're in the right place)
+
           cd "$PROJECT_DIR"
           
-          # Create venv if it doesn't exist
+          # 4. Create venv if it doesn't exist
           if [ ! -d "$PROJECT_DIR/venv" ]; then
             echo "Creating virtual environment..."
             python3.12 -m venv "$PROJECT_DIR/venv"
-          else
-            echo "Virtual environment found!"
           fi
           
-          # Get all secrets from GitHub
+          # 5. Extract Secrets
           DB_NAME="${{ secrets.DB_NAME }}"
           DB_USER="${{ secrets.DB_USER }}"
           DB_PASSWORD="${{ secrets.DB_PASSWORD }}"
@@ -58,70 +58,49 @@ jobs:
           DB_HOST="localhost"
           DB_PORT="5432"
           
-          # Validate all required secrets at once
-          MISSING_SECRETS=""
-          if [ -z "$DB_PASSWORD" ]; then
-            MISSING_SECRETS="${MISSING_SECRETS}DB_PASSWORD "
-          fi
-          if [ -z "$SECRET_KEY" ]; then
-            MISSING_SECRETS="${MISSING_SECRETS}DJANGO_SECRET_KEY "
-          fi
-          
-          if [ -n "$MISSING_SECRETS" ]; then
-            echo "ERROR: Required secrets are missing: $MISSING_SECRETS"
-            echo "Please add them to your GitHub repository secrets."
+          # Validation
+          if [ -z "$DB_PASSWORD" ] || [ -z "$SECRET_KEY" ]; then
+            echo "ERROR: Required secrets (DB_PASSWORD or DJANGO_SECRET_KEY) are missing."
             exit 1
           fi
           
-          # Set defaults for optional secrets
+          # Set defaults
           DB_NAME="${DB_NAME:-utrack_db}"
           DB_USER="${DB_USER:-utrack_user}"
           ALLOWED_HOSTS="${ALLOWED_HOSTS:-*}"
           
-          # Activate venv and install dependencies
+          # 6. Activate venv and install dependencies
           source "$PROJECT_DIR/venv/bin/activate"
           pip install --upgrade pip
           pip install -r requirements.txt
           pip install gunicorn psycopg2-binary
           
-          # Check if database exists and create if needed
+          # 7. Check and create database
+          # IMPORTANT: The EOF below MUST be at the very start of the line.
           if ! sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
-            echo "Setting up PostgreSQL database..."
-            sudo -u postgres psql << EOF
-            CREATE DATABASE $DB_NAME;
-            CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';
-            ALTER ROLE $DB_USER SET client_encoding TO 'utf8';
-            ALTER ROLE $DB_USER SET default_transaction_isolation TO 'read committed';
-            ALTER ROLE $DB_USER SET timezone TO 'UTC';
-            GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;
-            \q
-            EOF
+          echo "Setting up PostgreSQL database..."
+          sudo -u postgres psql <<EOF
+          CREATE DATABASE $DB_NAME;
+          CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';
+          ALTER ROLE $DB_USER SET client_encoding TO 'utf8';
+          ALTER ROLE $DB_USER SET default_transaction_isolation TO 'read committed';
+          ALTER ROLE $DB_USER SET timezone TO 'UTC';
+          GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;
+          \q
+          EOF
             echo "PostgreSQL database created!"
           else
             echo "PostgreSQL database already exists!"
           fi
           
-          # Export environment variables for migrations
-          export SECRET_KEY
-          export DEBUG="False"
-          export DB_NAME
-          export DB_USER
-          export DB_PASSWORD
-          export DB_HOST
-          export DB_PORT
-          export ALLOWED_HOSTS
-          
-          # Run migrations
+          # 8. Run migrations
+          export SECRET_KEY DEBUG="False" DB_NAME DB_USER DB_PASSWORD DB_HOST DB_PORT ALLOWED_HOSTS
           python3 manage.py migrate
-          
-          # Create logs directory if it doesn't exist
           mkdir -p "$PROJECT_DIR/logs"
-          # Collect static files (uncomment when needed)
-          # python3 manage.py collectstatic --noinput
           
-
-          # Setup systemd service for Gunicorn
-          sudo tee /etc/systemd/system/utrack.service > /dev/null << EOF
+          # 9. Setup systemd service for Gunicorn
+          # IMPORTANT: The EOF below MUST be at the very start of the line.
+          sudo tee /etc/systemd/system/utrack.service > /dev/null <<EOF
           [Unit]
           Description=UTrack Django application
           After=network.target
@@ -149,9 +128,9 @@ jobs:
           WantedBy=multi-user.target
           EOF
           
+          # 10. Start service
           sudo systemctl daemon-reload
           sudo systemctl enable utrack
           sudo systemctl restart utrack
 
           echo "Deployment completed successfully!"
-          
