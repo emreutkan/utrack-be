@@ -25,81 +25,54 @@ jobs:
           PROJECT_DIR="/home/ubuntu/utrack-backend"
           REPO_URL="https://github.com/emreutkan/utrack-be"
           
-          # 2. Install system dependencies
+          # 2. Install system dependencies (Adding nginx here)
           sudo apt update && sudo apt upgrade -y
-          sudo apt install -y python3.12 python3.12-venv python3-pip postgresql postgresql-contrib git libpq-dev python3-dev
+          sudo apt install -y python3.12 python3.12-venv python3-pip postgresql postgresql-contrib git libpq-dev python3-dev nginx
           
           # 3. Clone or update repository
           if [ ! -d "$PROJECT_DIR" ]; then
-            echo "Cloning repository..."
             sudo mkdir -p "$PROJECT_DIR"
             sudo chown ubuntu:ubuntu "$PROJECT_DIR"
             git clone "$REPO_URL" "$PROJECT_DIR"
           else
-            echo "Updating repository..."
             cd "$PROJECT_DIR"
             git pull origin master
           fi
 
           cd "$PROJECT_DIR"
           
-          # 4. Create venv if it doesn't exist
-          if [ ! -d "$PROJECT_DIR/venv" ]; then
-            echo "Creating virtual environment..."
-            python3.12 -m venv "$PROJECT_DIR/venv"
+          # 4. Create venv and install dependencies
+          if [ ! -d "venv" ]; then
+            python3.12 -m venv venv
           fi
-          
-          # 5. Extract Secrets
-          DB_NAME="${{ secrets.DB_NAME }}"
-          DB_USER="${{ secrets.DB_USER }}"
-          DB_PASSWORD="${{ secrets.DB_PASSWORD }}"
-          SECRET_KEY="${{ secrets.DJANGO_SECRET_KEY }}"
-          ALLOWED_HOSTS="${{ secrets.ALLOWED_HOSTS }}"
-          DB_HOST="localhost"
-          DB_PORT="5432"
-          
-          # Validation
-          if [ -z "$DB_PASSWORD" ] || [ -z "$SECRET_KEY" ]; then
-            echo "ERROR: Required secrets (DB_PASSWORD or DJANGO_SECRET_KEY) are missing."
-            exit 1
-          fi
-          
-          # Set defaults
-          DB_NAME="${DB_NAME:-utrack_db}"
-          DB_USER="${DB_USER:-utrack_user}"
-          ALLOWED_HOSTS="${ALLOWED_HOSTS:-*}"
-          
-          # 6. Activate venv and install dependencies
-          source "$PROJECT_DIR/venv/bin/activate"
+          source venv/bin/activate
           pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install gunicorn psycopg2-binary
+          pip install -r requirements.txt gunicorn psycopg2-binary
           
-          # 7. Check and create database
-          # IMPORTANT: The EOF below MUST be at the very start of the line.
+          # 5. Extract Secrets & Environment Setup
+          export SECRET_KEY="${{ secrets.DJANGO_SECRET_KEY }}"
+          export DB_NAME="${{ secrets.DB_NAME }}"
+          export DB_USER="${{ secrets.DB_USER }}"
+          export DB_PASSWORD="${{ secrets.DB_PASSWORD }}"
+          export ALLOWED_HOSTS="${{ secrets.ALLOWED_HOSTS }}"
+          export DB_HOST="localhost"
+          export DB_PORT="5432"
+          export DEBUG="False"
+          
+          # 6. Database Setup
           if ! sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
-          echo "Setting up PostgreSQL database..."
-          sudo -u postgres psql <<EOF
+            sudo -u postgres psql <<EOF
           CREATE DATABASE $DB_NAME;
           CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';
-          ALTER ROLE $DB_USER SET client_encoding TO 'utf8';
-          ALTER ROLE $DB_USER SET default_transaction_isolation TO 'read committed';
-          ALTER ROLE $DB_USER SET timezone TO 'UTC';
           GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;
-          \q
           EOF
-            echo "PostgreSQL database created!"
-          else
-            echo "PostgreSQL database already exists!"
           fi
           
-          # 8. Run migrations
-          export SECRET_KEY DEBUG="False" DB_NAME DB_USER DB_PASSWORD DB_HOST DB_PORT ALLOWED_HOSTS
-          python3 manage.py migrate
-          mkdir -p "$PROJECT_DIR/logs"
+          # 7. Django Prep (Migrations + Static Files)
+          python3 manage.py migrate --noinput
+          python3 manage.py collectstatic --noinput
           
-          # 9. Setup systemd service for Gunicorn
-          # IMPORTANT: The EOF below MUST be at the very start of the line.
+          # 8. Setup Gunicorn Systemd Service
           sudo tee /etc/systemd/system/utrack.service > /dev/null <<EOF
           [Unit]
           Description=UTrack Django application
@@ -111,26 +84,55 @@ jobs:
           WorkingDirectory=$PROJECT_DIR
           Environment="PATH=$PROJECT_DIR/venv/bin"
           Environment="SECRET_KEY=$SECRET_KEY"
-          Environment="DEBUG=False"
           Environment="DB_NAME=$DB_NAME"
           Environment="DB_USER=$DB_USER"
           Environment="DB_PASSWORD=$DB_PASSWORD"
           Environment="DB_HOST=$DB_HOST"
           Environment="DB_PORT=$DB_PORT"
           Environment="ALLOWED_HOSTS=$ALLOWED_HOSTS"
-          ExecStart=$PROJECT_DIR/venv/bin/gunicorn \
-              --workers 3 \
-              --bind unix:$PROJECT_DIR/utrack.sock \
-              --timeout 120 \
-              utrack.wsgi:application
+          Environment="DEBUG=False"
+          ExecStart=$PROJECT_DIR/venv/bin/gunicorn --workers 3 --bind unix:$PROJECT_DIR/utrack.sock utrack.wsgi:application
 
           [Install]
           WantedBy=multi-user.target
           EOF
           
-          # 10. Start service
-          sudo systemctl daemon-reload
-          sudo systemctl enable utrack
-          sudo systemctl restart utrack
+          # 9. Setup Nginx Configuration
+          sudo tee /etc/nginx/sites-available/utrack > /dev/null <<EOF
+          server {
+              listen 80;
+              server_name ${{ secrets.EC2_HOST }};
 
-          echo "Deployment completed successfully!"
+              location = /favicon.ico { access_log off; log_not_found off; }
+
+              location /static/ {
+                  root $PROJECT_DIR;
+              }
+
+              location / {
+                  include proxy_params;
+                  proxy_pass http://unix:$PROJECT_DIR/utrack.sock;
+              }
+          }
+          EOF
+
+          # 10. Permissions & Activation
+          sudo chmod 755 /home/ubuntu
+          sudo chmod 755 $PROJECT_DIR
+          
+          sudo ln -sf /etc/nginx/sites-available/utrack /etc/nginx/sites-enabled/
+          sudo rm -f /etc/nginx/sites-enabled/default  # Remove default nginx page if it exists
+          
+          # 11. Final Services Restart
+          sudo systemctl daemon-reload
+          sudo systemctl restart utrack
+          sudo systemctl enable utrack
+          
+          if sudo nginx -t; then
+              sudo systemctl restart nginx
+          else
+              echo "Nginx configuration error!"
+              exit 1
+          fi
+
+          echo "Deployment of UTrack successful!"
