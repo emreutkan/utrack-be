@@ -147,4 +147,4 @@ sudo chmod 755 "$PROJECT_DIR"
 mkdir -p "$PROJECT_DIR/logs"
 mkdir -p "$PROJECT_DIR/media"
 sudo chown -R ubuntu:www-data "$PROJECT_DIR"
-sudo chmod -R 775 "$PROJECT_
+sudo chmod -R 775 "$PROJECT_DIR"
