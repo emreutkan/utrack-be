@@ -6,11 +6,12 @@ echo "Starting UTrack Bootstrap"
 # 1. Set variables
 PROJECT_DIR="/home/ubuntu/utrack-backend"
 REPO_URL="https://github.com/emreutkan/utrack-be"
+DOMAIN_NAME="${DOMAIN_NAME:-api.utrack.irfanemreutkan.com}"
 
 # 2. Install system dependencies
 echo "Installing system packages..."
 sudo apt update && sudo apt upgrade -y
-sudo apt install -y python3.12 python3.12-venv python3-pip postgresql postgresql-contrib git libpq-dev python3-dev nginx
+sudo apt install -y python3.12 python3.12-venv python3-pip postgresql postgresql-contrib git libpq-dev python3-dev nginx certbot python3-certbot-nginx
 
 # 3. Clone repository
 echo "Setting up project directory..."
@@ -38,7 +39,7 @@ DB_NAME="${DB_NAME:-utrack_db}"
 DB_USER="${DB_USER:-utrack_user}"
 DB_PASSWORD="${DB_PASSWORD}"
 SECRET_KEY="${SECRET_KEY}"
-ALLOWED_HOSTS="${ALLOWED_HOSTS:-*}"
+ALLOWED_HOSTS="${ALLOWED_HOSTS:-api.utrack.irfanemreutkan.com}"
 
 # Validate required secrets
 if [ -z "$DB_PASSWORD" ] || [ -z "$SECRET_KEY" ]; then
@@ -101,13 +102,10 @@ EOF
 
 # 8. Setup Nginx configuration
 echo "Setting up Nginx..."
-# Use EC2_HOST if provided, otherwise fallback to ALLOWED_HOSTS
-NGINX_HOST="\${EC2_HOST:-$ALLOWED_HOSTS}"
-
 sudo tee /etc/nginx/sites-available/utrack > /dev/null <<EOF
 server {
     listen 80;
-    server_name $NGINX_HOST;
+    server_name $DOMAIN_NAME;
 
     location = /favicon.ico { access_log off; log_not_found off; }
 
@@ -123,7 +121,7 @@ server {
         proxy_pass http://unix:$PROJECT_DIR/utrack.sock;
         
         # Explicit headers to prevent the 400 Bad Request error
-        proxy_set_header Host \$http_host;
+        proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
@@ -140,11 +138,42 @@ EOF
 sudo ln -sf /etc/nginx/sites-available/utrack /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 
-# 10. Set permissions
+# 10. Test and reload Nginx
+echo "Testing Nginx configuration..."
+sudo nginx -t
+sudo systemctl reload nginx
+
+# 11. Setup SSL Certificate with Certbot
+echo "Setting up SSL certificate..."
+# Check if certificate already exists
+if sudo certbot certificates 2>/dev/null | grep -q "$DOMAIN_NAME"; then
+    echo "Certificate already exists, installing..."
+    sudo certbot install --cert-name $DOMAIN_NAME --nginx --redirect
+else
+    echo "Obtaining new certificate..."
+    # Run certbot in non-interactive mode with redirect
+    # Note: You may need to set CERTBOT_EMAIL environment variable
+    CERTBOT_EMAIL="${CERTBOT_EMAIL:-admin@irfanemreutkan.com}"
+    sudo certbot --nginx -d $DOMAIN_NAME --non-interactive --agree-tos --redirect --email $CERTBOT_EMAIL
+fi
+
+# 12. Set permissions
 echo "Setting permissions..."
 sudo chmod 755 /home/ubuntu
 sudo chmod 755 "$PROJECT_DIR"
 mkdir -p "$PROJECT_DIR/logs"
 mkdir -p "$PROJECT_DIR/media"
+mkdir -p "$PROJECT_DIR/staticfiles"
 sudo chown -R ubuntu:www-data "$PROJECT_DIR"
-sudo chmod -R 775 "$PROJECT_
+sudo chmod -R 775 "$PROJECT_DIR"
+
+# 13. Start services
+echo "Starting services..."
+sudo systemctl daemon-reload
+sudo systemctl enable utrack
+sudo systemctl start utrack
+sudo systemctl enable nginx
+sudo systemctl restart nginx
+
+echo "Bootstrap complete! Your API should be available at https://$DOMAIN_NAME"
+echo "Note: If you see a kernel upgrade message, consider rebooting: sudo reboot"
