@@ -33,19 +33,7 @@ source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt gunicorn psycopg2-binary
 
-# 5. Handle Secrets (Creates the initial .env)
-DB_NAME="${DB_NAME:-utrack_db}"
-DB_USER="${DB_USER:-utrack_user}"
-DB_PASSWORD="${DB_PASSWORD}"
-SECRET_KEY="${SECRET_KEY}"
-ALLOWED_HOSTS="${ALLOWED_HOSTS:-*}"
-
-# Validate required secrets
-if [ -z "$DB_PASSWORD" ] || [ -z "$SECRET_KEY" ]; then
-    echo "ERROR: DB_PASSWORD and SECRET_KEY are required to bootstrap!"
-    exit 1
-fi
-
+# 5. Handle Secrets
 echo "Creating initial .env file..."
 cat > .env <<EOF
 SECRET_KEY=$SECRET_KEY
@@ -68,7 +56,6 @@ ALTER ROLE $DB_USER SET client_encoding TO 'utf8';
 ALTER ROLE $DB_USER SET default_transaction_isolation TO 'read committed';
 ALTER ROLE $DB_USER SET timezone TO 'UTC';
 GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;
-\q
 EOF
     echo "Database created!"
 else
@@ -86,12 +73,12 @@ After=network.target
 User=ubuntu
 Group=www-data
 WorkingDirectory=$PROJECT_DIR
-# Use the .env file for environment variables
 EnvironmentFile=$PROJECT_DIR/.env
-ExecStart=$PROJECT_DIR/venv/bin/gunicorn \\
-    --workers 3 \\
-    --bind unix:$PROJECT_DIR/utrack.sock \\
-    --timeout 120 \\
+ExecStart=$PROJECT_DIR/venv/bin/gunicorn \
+    --workers 3 \
+    --bind unix:$PROJECT_DIR/utrack.sock \
+    --timeout 120 \
+    --log-level debug \
     utrack.wsgi:application
 Restart=always
 
@@ -101,7 +88,6 @@ EOF
 
 # 8. Setup Nginx configuration
 echo "Setting up Nginx..."
-# Use EC2_HOST if provided, otherwise fallback to ALLOWED_HOSTS
 NGINX_HOST="\${EC2_HOST:-$ALLOWED_HOSTS}"
 
 sudo tee /etc/nginx/sites-available/utrack > /dev/null <<EOF
@@ -120,14 +106,8 @@ server {
     }
 
     location / {
+        include proxy_params;
         proxy_pass http://unix:$PROJECT_DIR/utrack.sock;
-        
-        # Explicit headers to prevent the 400 Bad Request error
-        proxy_set_header Host \$http_host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        
         proxy_read_timeout 120s;
         proxy_connect_timeout 120s;
     }
@@ -140,7 +120,7 @@ EOF
 sudo ln -sf /etc/nginx/sites-available/utrack /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 
-# 10. Set permissions
+# 10. Set permissions and Start Services
 echo "Setting permissions..."
 sudo chmod 755 /home/ubuntu
 sudo chmod 755 "$PROJECT_DIR"
@@ -148,3 +128,11 @@ mkdir -p "$PROJECT_DIR/logs"
 mkdir -p "$PROJECT_DIR/media"
 sudo chown -R ubuntu:www-data "$PROJECT_DIR"
 sudo chmod -R 775 "$PROJECT_DIR"
+
+# 11. Finalizing
+sudo systemctl daemon-reload
+sudo systemctl enable utrack
+sudo systemctl restart utrack
+sudo systemctl restart nginx
+
+echo "Bootstrap complete!"
