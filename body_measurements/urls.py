@@ -13,3 +13,4 @@ urlpatterns = [
     path('calculate-body-fat/women/', CalculateBodyFatWomenView.as_view(), name='calculate-body-fat-women'),
 ]
 
+

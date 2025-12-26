@@ -5,6 +5,9 @@ import sys
 import platform
 import subprocess
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def is_windows():
     """Check if running on Windows."""
@@ -19,11 +22,19 @@ def venv_exists():
         return (venv_path / 'bin' / 'python').exists()
 
 def create_venv():
-    """Create virtual environment if it doesn't exist."""
+    """Create virtual environment and install requirements."""
     print("Creating virtual environment...")
     subprocess.run([sys.executable, '-m', 'venv', 'venv'], check=True)
-    print("Virtual environment created successfully!")
-
+    
+    venv_python = get_venv_python()
+    req_file = Path('requirements.txt')
+    
+    if req_file.exists():
+        print(f"Installing dependencies from {req_file}...")
+        # Use -m pip to ensure we use the venv's pip
+        subprocess.run([str(venv_python), '-m', 'pip', 'install', '-r', str(req_file)], check=True)
+    else:
+        print("Warning: requirements.txt not found. Skipping installation.")
 def get_venv_python():
     """Get the path to the venv Python interpreter."""
     venv_path = Path('venv')
@@ -45,11 +56,10 @@ def run_server():
     
     # Build command
     if is_windows():
-        cmd = [str(venv_python), 'manage.py', 'runserver', '192.168.1.7:8000']
-        print("Starting server on Windows at 192.168.1.7:8000...")
+  
+        cmd = [str(venv_python), 'manage.py', 'runserver', os.getenv("API_HOST")]
     else:
         cmd = [str(venv_python), 'manage.py', 'runserver']
-        print("Starting server on Linux...")
     
     # Run the server
     subprocess.run(cmd)

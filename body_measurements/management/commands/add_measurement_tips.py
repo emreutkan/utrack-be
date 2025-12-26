@@ -74,3 +74,4 @@ All measurements should be in centimeters (cm) for the US Navy formula.""",
             self.style.SUCCESS(f'Successfully added measurement tips to knowledge base')
         )
 
+

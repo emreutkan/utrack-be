@@ -57,3 +57,4 @@ class Command(BaseCommand):
             self.style.SUCCESS(f'\nCompleted! Recalculated calories for {updated_count}/{total_workouts} workouts')
         )
 
+

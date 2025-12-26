@@ -186,3 +186,4 @@ class Command(BaseCommand):
             f'\nImport complete: {created_count} created, {updated_count} updated, {skipped_count} skipped'
         ))
 
+

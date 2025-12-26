@@ -1,0 +1,61 @@
+name: Docker Deploy to EC2
+
+on:
+  push:
+    branches:
+      - master  # Change to 'main' if your branch is named main
+  workflow_dispatch: # Allows you to click a button to redeploy manually
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            PROJECT_DIR="/home/ubuntu/utrack-backend"
+            cd "$PROJECT_DIR"
+            
+            # 1. Pull latest code
+            git fetch origin master
+            git reset --hard origin/master
+            
+            # 2. Overwrite .env with ALL current secrets
+            # This ensures any changes in GitHub Secrets are applied immediately
+            cat > .env <<EOF
+            SECRET_KEY="${{ secrets.DJANGO_SECRET_KEY }}"
+            POSTGRES_DB="${{ secrets.DB_NAME }}"
+            POSTGRES_USER="${{ secrets.DB_USER }}"
+            POSTGRES_PASSWORD="${{ secrets.DB_PASSWORD }}"
+            DATABASE_URL="postgres://${{ secrets.DB_USER }}:${{ secrets.DB_PASSWORD }}@db:5432/${{ secrets.DB_NAME }}"
+            ALLOWED_HOSTS="${{ secrets.ALLOWED_HOSTS }}"
+            
+            # Apple / iCloud Secrets
+            APPLE_KEY_ID="${{ secrets.APPLE_KEY_ID }}"
+            APPLE_TEAM_ID="${{ secrets.APPLE_TEAM_ID }}"
+            APPLE_CLIENT_ID="${{ secrets.APPLE_CLIENT_ID }}"
+            APPLE_PRIVATE_KEY="${{ secrets.APPLE_PRIVATE_KEY }}"
+            
+            # Infrastructure & Environment
+            EC2_ELASTIC_IP="${{ secrets.EC2_ELASTIC_IP }}"
+            API_HOST="${{ secrets.API_HOST }}"
+            LOCALHOST=False
+            EOF
+
+            # 3. Build the new image and restart the containers
+            # Docker Compose is smart: it only restarts what has changed
+            
+            # We make this commented out because postgre is set optinal and wont start if not requested, to allow local development with sqlite
+            # docker compose up -d --build
+            docker compose --profile postgres up -d --build            
+
+            
+            # 4. Clean up old images to keep EC2 disk space free
+            docker image prune -f
+            
+            echo "Deployment successful"

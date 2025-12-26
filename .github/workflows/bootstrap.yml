@@ -1,4 +1,4 @@
-name: Bootstrap EC2 Environment
+name: Bootstrap EC2 Environment (Manual)
 
 on:
   workflow_dispatch:  # Manual trigger only
@@ -8,28 +8,33 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Bootstrap EC2
+    - name: Bootstrap EC2 via SSH
       uses: appleboy/ssh-action@master
       with:
         host: ${{ secrets.EC2_HOST }}
         username: ${{ secrets.EC2_USER }}
         key: ${{ secrets.EC2_SSH_KEY }}
+        # 1. Declare which variables should be passed to the remote shell
+        envs: DB_NAME,DB_USER,DB_PASSWORD,SECRET_KEY,ALLOWED_HOSTS,EC2_HOST
+        # 2. Map the GitHub Secrets to those variables
+        env:
+          DB_NAME="${{ secrets.DB_NAME }}"
+          DB_USER="${{ secrets.DB_USER }}"
+          DB_PASSWORD="${{ secrets.DB_PASSWORD }}"
+          SECRET_KEY="${{ secrets.DJANGO_SECRET_KEY }}"
+          ALLOWED_HOSTS="${{ secrets.ALLOWED_HOSTS }}"
+          EC2_HOST="${{ secrets.EC2_HOST }}"
         script: |
-          # Set environment variables from secrets
-          export DB_NAME="${{ secrets.DB_NAME }}"
-          export DB_USER="${{ secrets.DB_USER }}"
-          export DB_PASSWORD="${{ secrets.DB_PASSWORD }}"
-          export SECRET_KEY="${{ secrets.DJANGO_SECRET_KEY }}"
-          export ALLOWED_HOSTS="${{ secrets.ALLOWED_HOSTS }}"
-          export EC2_HOST="${{ secrets.EC2_HOST }}"
+          set -e
           
-          # Set defaults
+          # 3. Set defaults for optional variables if they weren't provided
           export DB_NAME="${DB_NAME:-utrack_db}"
           export DB_USER="${DB_USER:-utrack_user}"
           export ALLOWED_HOSTS="${ALLOWED_HOSTS:-*}"
           
-          # Download and run bootstrap script
+          echo "Starting Manual Bootstrap for $DB_NAME..."
+          
+          # 4. Download and run the manual bootstrap script
           curl -fsSL https://raw.githubusercontent.com/emreutkan/utrack-be/master/bootstrap.sh > bootstrap.sh
           chmod +x bootstrap.sh
           ./bootstrap.sh
-

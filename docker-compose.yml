@@ -1,0 +1,45 @@
+version: '3.8'
+## github-actions will create the .env
+services:
+    db:
+        image: postgres:16 # postgres:16-alpine
+        profiles: ["postgres"]  # Only start when explicitly requested
+        environment:
+            POSTGRES_USER: ${POSTGRES_USER} # postgres user
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD} # postgres password
+            POSTGRES_DB: ${POSTGRES_DB} # postgres database name
+        volumes:
+            - db_data:/var/lib/postgresql/data # postgres data volume 
+        ports:
+            - "5432:5432" # postgres port
+        healthcheck:
+            # postgres healthcheck
+            test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    web:
+        build:
+            context: . # context is the root directory of the project
+            dockerfile: Dockerfile
+        command: sh -c "python manage.py collectstatic --noinput && python manage.py migrate && gunicorn --bind 0.0.0.0:8000 --workers 3 --timeout 120 utrack.wsgi:application"
+        volumes:
+            - ./staticfiles:/app/staticfiles
+            - ./media:/app/media
+            - ./logs:/app/logs
+        ports:
+            - "8000:8000"
+        env_file:
+            - .env
+        environment:
+            DATABASE_URL: ${DATABASE_URL} # database url: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+            LOCALHOST: ${LOCALHOST} # localhost: true or false
+        depends_on: # before web service starts, db service must be healthy
+            db: # db service
+                condition: service_healthy # check if db service is healthy
+                required: false  # don't fail if db service isn't running (for local development with sqlite)
+
+
+volumes: # volumes are used to persist data across container restarts
+    db_data: # db data volume : /var/lib/postgresql/data

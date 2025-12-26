@@ -66,3 +66,4 @@ class CalculateBodyFatSerializer(serializers.Serializer):
         
         return data
 
+

@@ -14,39 +14,94 @@ from pathlib import Path
 
 import os
 import warnings
-from dotenv import load_dotenv
+import environ
+from pathlib import Path
 
-# Load environment variables from .env file
-load_dotenv()
-
-# Suppress specific warnings from dj_rest_auth regarding allauth deprecations
-warnings.filterwarnings('ignore', message='.*app_settings.USERNAME_REQUIRED is deprecated.*')
-warnings.filterwarnings('ignore', message='.*app_settings.EMAIL_REQUIRED is deprecated.*')
+# Initialize environ
+env = environ.Env(
+  
+)
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Take environment variables from .env file
+environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+# --- Configuration ---
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-mgv+8j9y@yo#6%5t__e$^+m@*d!%nsjh=vki57cj7!df46*#%8')
+# 1. Core Settings (Typed automatically)
+SECRET_KEY = env('SECRET_KEY')
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',') if os.environ.get('ALLOWED_HOSTS') else ['*']
 
-# Fallback for production if the env var is missing or empty
-if not ALLOWED_HOSTS:
-    if DEBUG:
-        ALLOWED_HOSTS = ['*']
-    else:
-        # In production, if ALLOWED_HOSTS is empty, Django throws 400. 
-        # Add a safe default or make sure your .env is loaded.
-        ALLOWED_HOSTS = ['16.16.248.86', 'localhost', '127.0.0.1', 'api.utrack.irfanemreutkan.com']
-# Application definition
+
+
+# 4. Apple & EC2 Settings
+APPLE_KEY_ID = env('APPLE_KEY_ID')
+APPLE_TEAM_ID = env('APPLE_TEAM_ID')
+APPLE_CLIENT_ID = env('APPLE_CLIENT_ID')
+APPLE_PRIVATE_KEY = env('APPLE_PRIVATE_KEY').replace('\\n', '\n') # Fixes newline issues in keys
+EC2_ELASTIC_IP = env('EC2_ELASTIC_IP')
+API_HOST = env('API_HOST')
+POSTGRES_USER = env('POSTGRES_USER')
+POSTGRES_PASSWORD = env('POSTGRES_PASSWORD')
+POSTGRES_DB = env('POSTGRES_DB')
+DB_HOST = env('DB_HOST')
+DB_PORT = env('DB_PORT')
+LOCALHOST = env('LOCALHOST')
+# Suppress specific warnings from dj_rest_auth regarding allauth deprecations
+warnings.filterwarnings('ignore', message='.*app_settings.USERNAME_REQUIRED is deprecated.*')
+warnings.filterwarnings('ignore', message='.*app_settings.EMAIL_REQUIRED is deprecated.*')
+
+
+DB_HOST = 'db' if LOCALHOST == 'True' else env('DB_HOST')
+DB_PORT = 5432 if LOCALHOST == 'True' else env('DB_PORT')
+if POSTGRES_USER and POSTGRES_PASSWORD and POSTGRES_DB:
+    DATABASE_URL = f"postgres://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
+
+
+if LOCALHOST == 'True' and not DATABASE_URL:
+    DEBUG = True
+    ALLOWED_HOSTS = ['*']
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
+elif LOCALHOST == 'True' and DATABASE_URL: # Localhost is True and DATABASE_URL is set WHICH MEANS WE ARE IN DOCKER COMPOSE
+    DEBUG = True
+    ALLOWED_HOSTS = ['*']
+    DB_HOST = 'db' # because we are in docker compose
+    DB_PORT = 5432 # because we are in docker compose
+    DATABASE_URL = f"postgres://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
+
+    DATABASES = {
+        'default': env.db('DATABASE_URL')
+    }
+
+elif LOCALHOST == 'False' and DATABASE_URL: # Localhost is False and DATABASE_URL is set WHICH MEANS WE ARE IN EC2
+    DEBUG = False
+    ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=[])
+    DB_HOST = env('DB_HOST')
+    DB_PORT = env('DB_PORT')
+    DATABASES = {
+        'default': env.db('DATABASE_URL')
+    }
+    CSRF_TRUSTED_ORIGINS = [API_HOST]
+    raise ValueError("DATABASE_URL is not set")
+elif LOCALHOST == 'False' and not DATABASE_URL:
+    raise ValueError("DATABASE_URL is not set")
+else:
+    raise ValueError("LOCALHOST is not set", LOCALHOST, DATABASE_URL)
+    
+
+
+# Build paths inside the project like this: BASE_DIR / 'subdir'.
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+AUTH_USER_MODEL = 'user.CustomUser'
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -75,7 +130,6 @@ INSTALLED_APPS = [
     
 ]
 
-AUTH_USER_MODEL = 'user.CustomUser'
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware', # Add CorsMiddleware at the top
@@ -112,26 +166,6 @@ WSGI_APPLICATION = 'utrack.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
-
-# Use PostgreSQL if environment variables are set, otherwise use SQLite for development
-if os.environ.get('DB_NAME'):
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.environ.get('DB_NAME'),
-            'USER': os.environ.get('DB_USER'),
-            'PASSWORD': os.environ.get('DB_PASSWORD'),
-            'HOST': os.environ.get('DB_HOST', 'localhost'),
-            'PORT': os.environ.get('DB_PORT', '5432'),
-        }
-    }
-else:
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
-        }
-    }
 
 
 # Password validation
@@ -184,7 +218,6 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 CORS_ALLOW_ALL_ORIGINS = True # For dev, allow everyone. Safer than listing specific IPs if you move around.
 
 # CSRF Settings
-CSRF_TRUSTED_ORIGINS = ['https://api.utrack.irfanemreutkan.com']
 
 # Add Authentication Backends
 AUTHENTICATION_BACKENDS = [
@@ -263,9 +296,6 @@ SIMPLE_JWT = {
 REST_AUTH = {
     'USE_JWT': True,
     'JWT_AUTH_HTTPONLY': False, # <--- Add this line to return refresh token in body
-    # Remove or comment out these cookie settings
-    # 'JWT_AUTH_COOKIE': 'utrack-auth',
-    # 'JWT_AUTH_REFRESH_COOKIE': 'utrack-refresh-token',
 }
 
 SITE_ID = 1

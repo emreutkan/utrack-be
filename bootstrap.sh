@@ -3,6 +3,11 @@ set -e
 
 echo "Starting UTrack Bootstrap"
 
+# Top of your manual bootstrap.sh
+echo "Cleaning up Docker to make room for Manual installation..."
+sudo systemctl stop docker || true
+docker compose down || true
+
 # 1. Set variables
 PROJECT_DIR="/home/ubuntu/utrack-backend"
 REPO_URL="https://github.com/emreutkan/utrack-be"
@@ -44,6 +49,13 @@ DB_HOST=localhost
 DB_PORT=5432
 DEBUG=False
 ALLOWED_HOSTS=$ALLOWED_HOSTS
+APPLE_KEY_ID=$APPLE_KEY_ID
+APPLE_TEAM_ID=$APPLE_TEAM_ID
+APPLE_CLIENT_ID=$APPLE_CLIENT_ID
+APPLE_PRIVATE_KEY=$APPLE_PRIVATE_KEY
+EC2_ELASTIC_IP=$EC2_ELASTIC_IP
+API_HOST=$API_HOST
+LOCALHOST=${LOCALHOST:-False}
 EOF
 
 # 6. Setup PostgreSQL database
