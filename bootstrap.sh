@@ -42,9 +42,9 @@ pip install -r requirements.txt gunicorn psycopg2-binary
 echo "Creating initial .env file..."
 cat > .env <<EOF
 SECRET_KEY=$SECRET_KEY
-DB_NAME=$DB_NAME
-DB_USER=$DB_USER
-DB_PASSWORD=$DB_PASSWORD
+POSTGRES_DB=$POSTGRES_DB
+POSTGRES_USER=$POSTGRES_USER
+POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 DB_HOST=localhost
 DB_PORT=5432
 DEBUG=False
@@ -54,20 +54,19 @@ APPLE_TEAM_ID=$APPLE_TEAM_ID
 APPLE_CLIENT_ID=$APPLE_CLIENT_ID
 APPLE_PRIVATE_KEY=$APPLE_PRIVATE_KEY
 EC2_ELASTIC_IP=$EC2_ELASTIC_IP
-API_HOST=$API_HOST
 LOCALHOST=${LOCALHOST:-False}
 EOF
 
 # 6. Setup PostgreSQL database
 echo "Setting up PostgreSQL database..."
-if ! sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
+if ! sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw "$POSTGRES_DB"; then
     sudo -u postgres psql <<EOF
-CREATE DATABASE $DB_NAME;
-CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';
-ALTER ROLE $DB_USER SET client_encoding TO 'utf8';
-ALTER ROLE $DB_USER SET default_transaction_isolation TO 'read committed';
-ALTER ROLE $DB_USER SET timezone TO 'UTC';
-GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;
+CREATE DATABASE $POSTGRES_DB;
+CREATE USER $POSTGRES_USER WITH PASSWORD '$POSTGRES_PASSWORD';
+ALTER ROLE $POSTGRES_USER SET client_encoding TO 'utf8';
+ALTER ROLE $POSTGRES_USER SET default_transaction_isolation TO 'read committed';
+ALTER ROLE $POSTGRES_USER SET timezone TO 'UTC';
+GRANT ALL PRIVILEGES ON DATABASE $POSTGRES_DB TO $POSTGRES_USER;
 EOF
     echo "Database created!"
 else
@@ -105,8 +104,8 @@ sudo sed -i "s|__PROJECT_DIR__|$PROJECT_DIR|g" /etc/systemd/system/utrack.servic
 echo "Setting up Nginx..."
 
 # Determine the host string before writing the file
-if [ -n "$EC2_HOST" ]; then
-    FINAL_HOST="$EC2_HOST"
+if [ -n "$EC2_ELASTIC_IP" ]; then
+    FINAL_HOST="$EC2_ELASTIC_IP"
 else
     FINAL_HOST="${ALLOWED_HOSTS:-*}"
 fi

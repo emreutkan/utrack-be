@@ -44,7 +44,6 @@ jobs:
               printf '\n'
               printf '# Infrastructure & Environment\n'
               printf 'EC2_ELASTIC_IP=%s\n' "${{ secrets.EC2_ELASTIC_IP }}"
-              printf 'API_HOST=%s\n' "${{ secrets.API_HOST }}"
               printf 'LOCALHOST=False\n'
             } > .env
 

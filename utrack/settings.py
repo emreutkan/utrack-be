@@ -43,7 +43,6 @@ APPLE_TEAM_ID = env('APPLE_TEAM_ID')
 APPLE_CLIENT_ID = env('APPLE_CLIENT_ID')
 APPLE_PRIVATE_KEY = env('APPLE_PRIVATE_KEY').replace('\\n', '\n') # Fixes newline issues in keys
 EC2_ELASTIC_IP = env('EC2_ELASTIC_IP')
-API_HOST = env('API_HOST')
 POSTGRES_USER = env('POSTGRES_USER')
 POSTGRES_PASSWORD = env('POSTGRES_PASSWORD')
 POSTGRES_DB = env('POSTGRES_DB')
@@ -100,7 +99,7 @@ elif LOCALHOST == 'False' and DATABASE_URL: # Localhost is False and DATABASE_UR
     DATABASES = {
         'default': env.db('DATABASE_URL')
     }
-    CSRF_TRUSTED_ORIGINS = [API_HOST] if API_HOST else [] # API_HOST is the domain name of the server or IP address of the server
+    CSRF_TRUSTED_ORIGINS = ['https://api.utrack.irfanemreutkan.com'] 
 elif LOCALHOST == 'False' and not DATABASE_URL:
     raise ValueError("DATABASE_URL is not set")
 else:
