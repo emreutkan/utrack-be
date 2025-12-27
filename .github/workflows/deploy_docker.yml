@@ -27,25 +27,26 @@ jobs:
             
             # 2. Overwrite .env with ALL current secrets
             # This ensures any changes in GitHub Secrets are applied immediately
-            cat > .env <<EOF
-            SECRET_KEY="${{ secrets.DJANGO_SECRET_KEY }}"
-            POSTGRES_DB="${{ secrets.POSTGRES_DB }}"
-            POSTGRES_USER="${{ secrets.POSTGRES_USER }}"
-            POSTGRES_PASSWORD="${{ secrets.POSTGRES_PASSWORD }}"
-            DATABASE_URL="postgres://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@db:5432/${{ secrets.POSTGRES_DB }}"
-            ALLOWED_HOSTS="${{ secrets.ALLOWED_HOSTS }}"
-            
-            # Apple / iCloud Secrets
-            APPLE_KEY_ID="${{ secrets.APPLE_KEY_ID }}"
-            APPLE_TEAM_ID="${{ secrets.APPLE_TEAM_ID }}"
-            APPLE_CLIENT_ID="${{ secrets.APPLE_CLIENT_ID }}"
-            APPLE_PRIVATE_KEY="${{ secrets.APPLE_PRIVATE_KEY }}"
-            
-            # Infrastructure & Environment
-            EC2_ELASTIC_IP="${{ secrets.EC2_ELASTIC_IP }}"
-            API_HOST="${{ secrets.API_HOST }}"
-            LOCALHOST=False
-            EOF
+            # Using printf to safely handle special characters
+            {
+              printf 'SECRET_KEY=%s\n' "${{ secrets.DJANGO_SECRET_KEY }}"
+              printf 'POSTGRES_DB=%s\n' "${{ secrets.POSTGRES_DB }}"
+              printf 'POSTGRES_USER=%s\n' "${{ secrets.POSTGRES_USER }}"
+              printf 'POSTGRES_PASSWORD=%s\n' "${{ secrets.POSTGRES_PASSWORD }}"
+              printf 'DATABASE_URL=postgres://%s:%s@db:5432/%s\n' "${{ secrets.POSTGRES_USER }}" "${{ secrets.POSTGRES_PASSWORD }}" "${{ secrets.POSTGRES_DB }}"
+              printf 'ALLOWED_HOSTS=%s\n' "${{ secrets.ALLOWED_HOSTS }}"
+              printf '\n'
+              printf '# Apple / iCloud Secrets\n'
+              printf 'APPLE_KEY_ID=%s\n' "${{ secrets.APPLE_KEY_ID }}"
+              printf 'APPLE_TEAM_ID=%s\n' "${{ secrets.APPLE_TEAM_ID }}"
+              printf 'APPLE_CLIENT_ID=%s\n' "${{ secrets.APPLE_CLIENT_ID }}"
+              printf 'APPLE_PRIVATE_KEY=%s\n' "${{ secrets.APPLE_PRIVATE_KEY }}"
+              printf '\n'
+              printf '# Infrastructure & Environment\n'
+              printf 'EC2_ELASTIC_IP=%s\n' "${{ secrets.EC2_ELASTIC_IP }}"
+              printf 'API_HOST=%s\n' "${{ secrets.API_HOST }}"
+              printf 'LOCALHOST=False\n'
+            } > .env
 
             # 3. Build the new image and restart the containers
             # Docker Compose is smart: it only restarts what has changed
