@@ -81,16 +81,22 @@ elif LOCALHOST == 'True' and DATABASE_URL: # Localhost is True and DATABASE_URL 
         'default': env.db('DATABASE_URL')
     }
 
-elif LOCALHOST == 'False' and DATABASE_URL: # Localhost is False and DATABASE_URL is set WHICH MEANS WE ARE IN EC2
+elif LOCALHOST == 'False' and DATABASE_URL: # Localhost is False and DATABASE_URL is set - could be Docker or EC2
     DEBUG = False
     ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=[])
-    DB_HOST = env('DB_HOST')
-    DB_PORT = env('DB_PORT')
+    # Check if we're in Docker (DATABASE_URL contains 'db:5432') or EC2 manual install
+    if 'db:5432' in DATABASE_URL:
+        # We're in Docker, use 'db' as host
+        DB_HOST = 'db'
+        DB_PORT = 5432
+    else:
+        # We're in EC2 manual install, use env values
+        DB_HOST = env('DB_HOST', default='localhost')
+        DB_PORT = env('DB_PORT', default='5432')
     DATABASES = {
         'default': env.db('DATABASE_URL')
     }
-    CSRF_TRUSTED_ORIGINS = [API_HOST] # API_HOST is the domain name of the server or IP address of the server
-    raise ValueError("DATABASE_URL is not set")
+    CSRF_TRUSTED_ORIGINS = [API_HOST] if API_HOST else [] # API_HOST is the domain name of the server or IP address of the server
 elif LOCALHOST == 'False' and not DATABASE_URL:
     raise ValueError("DATABASE_URL is not set")
 else:
