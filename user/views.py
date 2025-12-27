@@ -104,3 +104,40 @@ class UpdateGenderView(APIView):
             'gender': request.user.gender,
             'message': 'Gender updated successfully'
         }, status=status.HTTP_200_OK)
+
+class ChangePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        """
+        POST /api/user/change-password/
+        Change user's password
+        Requires: old_password, new_password
+        """
+        old_password = request.data.get('old_password')
+        new_password = request.data.get('new_password')
+        
+        if not old_password or not new_password:
+            return Response({
+                'error': 'old_password and new_password are required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Verify old password
+        if not request.user.check_password(old_password):
+            return Response({
+                'error': 'Invalid old password'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Validate new password
+        if len(new_password) < 8:
+            return Response({
+                'error': 'New password must be at least 8 characters long'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Set new password
+        request.user.set_password(new_password)
+        request.user.save()
+        
+        return Response({
+            'message': 'Password changed successfully'
+        }, status=status.HTTP_200_OK)
