@@ -36,6 +36,12 @@ services:
         environment:
             DATABASE_URL: ${DATABASE_URL} # database url: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
             LOCALHOST: ${LOCALHOST} # localhost: true or false
+        healthcheck:
+            test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 40s
         depends_on: # before web service starts, db service must be healthy
             db: # db service
                 condition: service_healthy # check if db service is healthy
@@ -51,7 +57,8 @@ services:
             - ./staticfiles:/usr/share/nginx/html/static:ro
             - ./media:/usr/share/nginx/html/media:ro
         depends_on:
-            - web
+            web:
+                condition: service_healthy
         restart: unless-stopped
 
 
