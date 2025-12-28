@@ -404,6 +404,7 @@ class AddExerciseSetToWorkoutExerciseView(APIView):
         data = request.data.copy()
         data['workout_exercise'] = workout_exercise.id ## we grab the workout exercise id from the reqest header  POST /api/workout/exercise/5/add_set/
         data['set_number'] = set_number
+        
         serializer = ExerciseSetSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
@@ -608,7 +609,6 @@ class DeleteWorkoutView(APIView):
             return Response(status=status.HTTP_204_NO_CONTENT)
         except Workout.DoesNotExist:
             return Response({'error': 'Workout not found'}, status=status.HTTP_404_NOT_FOUND)
-
 
 class CalendarView(APIView):
     permission_classes = [IsAuthenticated]

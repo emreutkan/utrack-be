@@ -43,9 +43,9 @@ APPLE_TEAM_ID = env('APPLE_TEAM_ID')
 APPLE_CLIENT_ID = env('APPLE_CLIENT_ID')
 APPLE_PRIVATE_KEY = env('APPLE_PRIVATE_KEY').replace('\\n', '\n') # Fixes newline issues in keys
 EC2_ELASTIC_IP = env('EC2_ELASTIC_IP')
-POSTGRES_USER = env('POSTGRES_USER')
-POSTGRES_PASSWORD = env('POSTGRES_PASSWORD')
-POSTGRES_DB = env('POSTGRES_DB')
+POSTGRES_USER = env('POSTGRES_USER', default="")
+POSTGRES_PASSWORD = env('POSTGRES_PASSWORD', default="")
+POSTGRES_DB = env('POSTGRES_DB', default="")
 LOCALHOST = env('LOCALHOST')
 # Suppress specific warnings from dj_rest_auth regarding allauth deprecations
 warnings.filterwarnings('ignore', message='.*app_settings.USERNAME_REQUIRED is deprecated.*')
@@ -62,7 +62,8 @@ if POSTGRES_USER and POSTGRES_PASSWORD and POSTGRES_DB:
         DATABASE_URL = env('DATABASE_URL')
     except:
         DATABASE_URL = f"postgres://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DB_HOST}:{DB_PORT}/{POSTGRES_DB}"
-
+else:
+    DATABASE_URL = None
 
 if LOCALHOST == 'True' and not DATABASE_URL:
     DEBUG = True
