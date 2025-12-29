@@ -617,17 +617,22 @@ class CalendarView(APIView):
         """
         GET /api/workout/calendar/
         Returns calendar data with workouts marked by date.
-        Query params: year, month, week (optional)
+        Query params: year (required), month (optional), week (optional)
+        
+        Examples:
+        - GET /api/workout/calendar/?year=2025&month=12 (month view)
+        - GET /api/workout/calendar/?year=2025&month=12&week=3 (week view)
+        - GET /api/workout/calendar/?year=2025 (year view)
         """
         year = request.query_params.get('year')
         month = request.query_params.get('month', None)
         week = request.query_params.get('week', None)
         
-        # Default to current year/month if not provided
+        # Require year parameter
         if not year:
-            year = timezone.now().year
-        if not month:
-            month = timezone.now().month
+            return Response({
+                'error': 'year parameter is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
         
         try:
             year = int(year)

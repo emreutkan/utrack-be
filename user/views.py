@@ -10,7 +10,11 @@ from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from .serializers import RegisterSerializer, UserSerializer
-from .models import UserProfile
+from .models import UserProfile, WeightHistory
+from rest_framework.pagination import PageNumberPagination
+from django.utils import timezone
+from datetime import date
+from body_measurements.models import BodyMeasurement
 
 User = get_user_model()
 
@@ -231,3 +235,154 @@ class ResetPasswordView(APIView):
         return Response({
             'message': 'Password reset successfully'
         }, status=status.HTTP_200_OK)
+
+class UpdateWeightView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        """
+        POST /api/user/weight/
+        Set or update user's current weight (in kg)
+        Creates a new weight history entry and updates UserProfile.body_weight
+        """
+        weight = request.data.get('weight')
+        
+        if weight is None:
+            return Response({
+                'error': 'weight field is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            weight = float(weight)
+            if weight <= 0:
+                return Response({
+                    'error': 'weight must be greater than 0'
+                }, status=status.HTTP_400_BAD_REQUEST)
+        except (ValueError, TypeError):
+            return Response({
+                'error': 'weight must be a valid number'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create new weight history entry
+        weight_entry = WeightHistory.objects.create(
+            user=request.user,
+            weight=weight
+        )
+        
+        # Update UserProfile with latest weight
+        profile, created = UserProfile.objects.get_or_create(user=request.user)
+        profile.body_weight = weight
+        profile.save()
+        
+        return Response({
+            'weight': str(weight_entry.weight),
+            'date': weight_entry.created_at.isoformat(),
+            'message': 'Weight updated successfully'
+        }, status=status.HTTP_200_OK)
+
+class WeightHistoryPagination(PageNumberPagination):
+    page_size = 100
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+class GetWeightHistoryView(APIView):
+    permission_classes = [IsAuthenticated]
+    pagination_class = WeightHistoryPagination
+    
+    def get(self, request):
+        """
+        GET /api/user/weight/
+        Get paginated weight history for the user (100 per page)
+        Returns: date, weight, bodyfat (if body measurement exists for that day)
+        """
+        paginator = WeightHistoryPagination()
+        
+        # Get all weight history entries for the user
+        weight_history = WeightHistory.objects.filter(user=request.user).order_by('-created_at')
+        
+        # Paginate - always returns paginated results
+        page = paginator.paginate_queryset(weight_history, request)
+        
+        results = []
+        for entry in page:
+            # Get date (just the date part, not time)
+            entry_date = entry.created_at.date()
+            
+            # Try to find body measurement on the same date
+            body_fat = None
+            body_measurement = BodyMeasurement.objects.filter(
+                user=request.user,
+                created_at__date=entry_date
+            ).first()
+            
+            if body_measurement and body_measurement.body_fat_percentage:
+                body_fat = float(body_measurement.body_fat_percentage)
+            
+            results.append({
+                'id': entry.id,
+                'date': entry.created_at.isoformat(),
+                'weight': float(entry.weight),
+                'bodyfat': body_fat
+            })
+        
+        return paginator.get_paginated_response(results)
+
+class DeleteWeightView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def delete(self, request, weight_id):
+        """
+        DELETE /api/user/weight/<weight_id>/
+        Delete a weight history entry.
+        Optional query parameter: delete_bodyfat=true to also delete body measurements on the same date
+        """
+        try:
+            # Get the weight history entry
+            weight_entry = WeightHistory.objects.get(
+                id=weight_id,
+                user=request.user
+            )
+        except WeightHistory.DoesNotExist:
+            return Response({
+                'error': 'Weight entry not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        # Get the date of the weight entry
+        entry_date = weight_entry.created_at.date()
+        
+        # Check if user wants to delete bodyfat on the same date
+        delete_bodyfat = request.query_params.get('delete_bodyfat', 'false').lower() == 'true'
+        
+        deleted_bodyfat = False
+        if delete_bodyfat:
+            # Find and delete body measurements on the same date
+            body_measurements = BodyMeasurement.objects.filter(
+                user=request.user,
+                created_at__date=entry_date
+            )
+            if body_measurements.exists():
+                count = body_measurements.count()
+                body_measurements.delete()
+                deleted_bodyfat = True
+        
+        # Delete the weight entry
+        weight_entry.delete()
+        
+        # Update UserProfile.body_weight to latest weight if this was the latest entry
+        latest_weight = WeightHistory.objects.filter(user=request.user).order_by('-created_at').first()
+        profile, created = UserProfile.objects.get_or_create(user=request.user)
+        if latest_weight:
+            profile.body_weight = latest_weight.weight
+        else:
+            profile.body_weight = None
+        profile.save()
+        
+        response_data = {
+            'message': 'Weight entry deleted successfully',
+            'deleted_date': entry_date.isoformat()
+        }
+        
+        if delete_bodyfat:
+            response_data['bodyfat_deleted'] = deleted_bodyfat
+        
+        return Response(response_data, status=status.HTTP_200_OK)

@@ -1,0 +1,40 @@
+name: Populate Exercises
+
+on:
+  workflow_dispatch: # Manual trigger only
+
+jobs:
+  populate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Populate Exercises via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_ELASTIC_IP }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            PROJECT_DIR="/home/ubuntu/utrack-backend"
+            cd "$PROJECT_DIR"
+            
+            # Pull latest code to ensure exercise_list.json is up to date
+            echo "Pulling latest code..."
+            git fetch origin master
+            git reset --hard origin/master
+            
+            # Check if containers are running, start if needed
+            echo "Checking Docker containers..."
+            if ! docker compose --profile postgres ps | grep -q "web.*Up"; then
+              echo "Starting containers..."
+              docker compose --profile postgres up -d
+              echo "Waiting for containers to be ready..."
+              sleep 10
+            fi
+            
+            # Run populate_exercises command inside the Docker container
+            echo " Running populate_exercises command..."
+            docker compose --profile postgres exec -T web python manage.py populate_exercises
+            
+            echo " Exercises populated successfully!"
+

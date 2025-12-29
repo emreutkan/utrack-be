@@ -342,7 +342,7 @@ LOGGING = {
     'handlers': {
         'file_errors': {
             'level': 'ERROR',
-            'class': 'logging.handlers.RotatingFileHandler',
+            'class': 'utrack.logging_handlers.WindowsSafeRotatingFileHandler',
             'filename': LOGS_DIR / 'errors.log',
             'maxBytes': 10 * 1024 * 1024,  # 10 MB
             'backupCount': 10,  # Keep 10 backup files
@@ -350,7 +350,7 @@ LOGGING = {
         },
         'file_info': {
             'level': 'INFO',
-            'class': 'logging.handlers.RotatingFileHandler',
+            'class': 'utrack.logging_handlers.WindowsSafeRotatingFileHandler',
             'filename': LOGS_DIR / 'info.log',
             'maxBytes': 10 * 1024 * 1024,  # 10 MB
             'backupCount': 5,  # Keep 5 backup files
@@ -358,7 +358,7 @@ LOGGING = {
         },
         'file_requests': {
             'level': 'INFO',
-            'class': 'logging.handlers.RotatingFileHandler',
+            'class': 'utrack.logging_handlers.WindowsSafeRotatingFileHandler',
             'filename': LOGS_DIR / 'requests.log',
             'maxBytes': 10 * 1024 * 1024,  # 10 MB
             'backupCount': 5,  # Keep 5 backup files

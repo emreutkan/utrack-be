@@ -34,10 +34,11 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     height = serializers.SerializerMethodField()
+    weight = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ['id', 'email', 'is_verified', 'gender', 'height', 'created_at']
+        fields = ['id', 'email', 'is_verified', 'gender', 'height', 'weight', 'created_at']
         read_only_fields = ['id', 'email', 'is_verified', 'created_at']
     
     def get_height(self, obj):
@@ -45,5 +46,13 @@ class UserSerializer(serializers.ModelSerializer):
         try:
             profile = obj.userprofile
             return float(profile.height) if profile.height else None
+        except UserProfile.DoesNotExist:
+            return None
+    
+    def get_weight(self, obj):
+        """Get latest weight from UserProfile"""
+        try:
+            profile = obj.userprofile
+            return float(profile.body_weight) if profile.body_weight else None
         except UserProfile.DoesNotExist:
             return None

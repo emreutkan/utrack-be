@@ -53,6 +53,18 @@ class UserProfile(TimestampedModel):
     body_weight = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text="Body weight in kg for calorie calculations")
     height = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text="Height in cm")
 
+class WeightHistory(TimestampedModel):
+    """Track user weight over time"""
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='weight_history')
+    weight = models.DecimalField(max_digits=5, decimal_places=2, help_text="Weight in kg")
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name_plural = 'Weight Histories'
+    
+    def __str__(self):
+        return f"{self.user.email} - {self.created_at.date()} - {self.weight}kg"
+
 class SecurityStatus(TimestampedModel):
     """
     Security status for user including login attempt tracking and lockout functionality.
