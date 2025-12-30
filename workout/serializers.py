@@ -81,10 +81,10 @@ class CompleteWorkoutSerializer(serializers.ModelSerializer):
         # instance.created_at is the "Start Time"
         time_diff = timezone.now() - instance.created_at
         
-        # total_seconds() gives precise diff. /60 for minutes.
-        # Using int() creates a floor value (25.9 mins -> 25 mins)
-        # Using round() is better (25.9 -> 26 mins)
-        validated_data['duration'] = int(time_diff.total_seconds() / 60) 
+        # Duration is stored in SECONDS (as per model definition)
+        # Cap duration at 6 hours (21600 seconds) to prevent unrealistic values
+        duration_seconds = int(time_diff.total_seconds())
+        validated_data['duration'] = min(duration_seconds, 21600)  # Max 6 hours 
         
         # 3. Calculate Intensity (Placeholder logic)
         # instance.intensity = calculate_intensity(instance)
@@ -92,9 +92,16 @@ class CompleteWorkoutSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 class ExerciseSetSerializer(serializers.ModelSerializer):
+    reps = serializers.IntegerField(min_value=0, max_value=100)
+    reps_in_reserve = serializers.IntegerField(min_value=0, max_value=100)
+    rest_time_before_set = serializers.IntegerField(min_value=0, max_value=10800)  # Max 3 hours (10800 seconds)
+    total_tut = serializers.IntegerField(min_value=0, max_value=600, required=False, allow_null=True)  # Max 10 minutes (600 seconds)
+    eccentric_time = serializers.IntegerField(min_value=0, max_value=600, required=False, allow_null=True)  # Max 10 minutes (600 seconds)
+    concentric_time = serializers.IntegerField(min_value=0, max_value=600, required=False, allow_null=True)  # Max 10 minutes (600 seconds)
+    
     class Meta:
         model = ExerciseSet
-        fields = ['id', 'workout_exercise', 'set_number', 'reps', 'weight', 'rest_time_before_set', 'is_warmup', 'reps_in_reserve']
+        fields = ['id', 'workout_exercise', 'set_number', 'reps', 'weight', 'rest_time_before_set', 'is_warmup', 'reps_in_reserve', 'eccentric_time', 'concentric_time', 'total_tut']
         read_only_fields = ['id']
 
 class WorkoutExerciseSerializer(serializers.ModelSerializer):

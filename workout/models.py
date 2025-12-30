@@ -17,19 +17,22 @@ class Workout(TimestampedModel):
     is_done = models.BooleanField(default=False) ## is_done is a boolean field that indicates whether the workout has been completed
     is_rest_day = models.BooleanField(default=False) ## is_rest_day marks the workout as a rest day but it still counts as a workout
     calories_burned = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True) ## calories burned during the workout
+    rest_timer_paused_at = models.DateTimeField(null=True, blank=True) ## timestamp when rest timer was paused/halted
 ##    body_parts_worked = models.JSONField(default=list, blank=True, null=True) ## body_parts_worked is a json field that contains the body parts worked in the workout
     
     def calculate_calories(self):
         """
-        Calculate calories burned using MET (Metabolic Equivalent of Task) method.
+        Calculate calories burned using volume-based formula for strength training.
         
-        Formula: Calories = MET × weight_kg × duration_hours
+        Step 1: Calculate Total Work Volume (weight × reps for all sets)
+        Step 2: Apply Energy Cost (2.75 calories per 1000kg lifted)
+        Step 3: Apply Difficulty Multiplier (based on exercise type)
+        Step 4: Add Metabolic Burn (MET × body_weight × duration_hours)
         
-        MET Values:
-        - Light Effort (3.0): Small isolation moves with long rests
-        - Moderate/General (3.5): Standard gym routine, mixing machines and free weights
-        - Vigorous/Bodybuilding (6.0): High intensity, heavy weights, short rest
-        - Powerlifting (5.0): Very heavy loads but very long rest periods
+        Formula:
+        - Work Burn = (total_volume_kg × energy_cost_per_1000kg × difficulty_multiplier) / 1000
+        - Metabolic Burn = MET × body_weight_kg × workout_duration_hours
+        - Total = Work Burn + Metabolic Burn
         
         Returns the calculated calories.
         """
@@ -51,17 +54,24 @@ class Workout(TimestampedModel):
             self.save(update_fields=['calories_burned'])
             return 0.0
         
-        # Analyze workout to determine MET value
+        # Step 1: Calculate Total Work Volume
+        total_volume_kg = 0.0  # Total weight × reps in kg
         total_sets = 0
-        total_rest_seconds = 0
         compound_count = 0
         isolation_count = 0
-        total_volume = 0.0  # Total weight × reps
         max_weight = 0.0
+        total_rest_seconds = 0
+        
+        # Track exercise types for difficulty multiplier
+        high_difficulty_exercises = ['deadlift', 'squat', 'thruster']  # Exercises with 1.2x multiplier
         
         for workout_exercise in workout_exercises:
             exercise = workout_exercise.exercise
             sets = workout_exercise.sets.all()
+            
+            # Check if exercise is high difficulty
+            exercise_name_lower = exercise.name.lower()
+            is_high_difficulty = any(term in exercise_name_lower for term in high_difficulty_exercises)
             
             if exercise.category == 'compound':
                 compound_count += 1
@@ -77,53 +87,74 @@ class Workout(TimestampedModel):
                 reps = exercise_set.reps if exercise_set.reps else 0
                 
                 if weight_kg > 0 and reps > 0:
-                    total_volume += weight_kg * reps
+                    # Calculate volume for this set
+                    set_volume = weight_kg * reps
+                    total_volume_kg += set_volume
                     max_weight = max(max_weight, weight_kg)
                 
                 if exercise_set.rest_time_before_set:
                     total_rest_seconds += exercise_set.rest_time_before_set
         
-        # Calculate average rest time per set
-        avg_rest_seconds = total_rest_seconds / total_sets if total_sets > 0 else 0
-        avg_rest_minutes = avg_rest_seconds / 60.0
+        # Step 2: Apply Energy Cost (2.75 calories per 1000kg - average of 2.5-3.0 range)
+        energy_cost_per_1000kg = 2.75
+        work_burn = (total_volume_kg * energy_cost_per_1000kg) / 1000.0
         
-        # Determine MET value based on workout characteristics
-        # Use workout intensity if explicitly set, otherwise calculate
+        # Step 3: Apply Difficulty Multiplier based on exercise types
+        compound_ratio = compound_count / (compound_count + isolation_count) if (compound_count + isolation_count) > 0 else 0.5
+        
+        # Determine difficulty multiplier
+        # High (1.2x): Mostly compound exercises, especially deadlifts/squats
+        # Medium (1.0x): Standard compound exercises
+        # Low (0.8x): Mostly isolation exercises
+        if compound_ratio >= 0.7:
+            difficulty_multiplier = 1.2  # High - mostly compound
+        elif compound_ratio >= 0.4:
+            difficulty_multiplier = 1.0  # Medium - mixed
+        else:
+            difficulty_multiplier = 0.8  # Low - mostly isolation
+        
+        # Apply difficulty multiplier to work burn
+        work_burn = work_burn * difficulty_multiplier
+        
+        # Step 4: Calculate Metabolic Burn using MET values
+        # Determine MET value based on workout intensity
         if self.intensity == 'high':
-            met_value = 6.0  # Vigorous/Bodybuilding
+            met_value = 6.0  # Vigorous
         elif self.intensity == 'low':
-            met_value = 3.0  # Light Effort
+            met_value = 3.5  # Light
         else:
             # Auto-determine based on workout characteristics
-            compound_ratio = compound_count / (compound_count + isolation_count) if (compound_count + isolation_count) > 0 else 0
-            
-            # Powerlifting: Very heavy weights with long rest (>3 min average)
-            if max_weight > 100 and avg_rest_minutes > 3.0:
-                met_value = 5.0
-            # Vigorous/Bodybuilding: High compound ratio, heavy weights, short rest
-            elif compound_ratio > 0.5 and max_weight > 50 and avg_rest_minutes < 2.0:
-                met_value = 6.0
-            # Moderate: Standard gym routine
-            elif compound_ratio > 0.3 or total_sets > 15:
-                met_value = 3.5
-            # Light: Mostly isolation, long rests
+            if max_weight > 100 and total_rest_seconds / total_sets > 180:  # Heavy weights, long rest
+                met_value = 5.0  # Moderate (powerlifting style)
+            elif compound_ratio > 0.5 and max_weight > 50:
+                met_value = 5.0  # Moderate (standard bodybuilding)
             else:
-                met_value = 3.0
+                met_value = 3.5  # Light
         
-        # Use workout duration (in seconds), convert to hours
-        # Duration should include rest time (total time from start to finish)
+        # Calculate workout duration in hours
         workout_duration_hours = self.duration / 3600.0 if self.duration > 0 else 0
         
-        # If duration is not set or seems too short, estimate from sets and rest
+        # If duration is not set, estimate from sets and rest
         if workout_duration_hours < 0.1:  # Less than 6 minutes
             # Estimate: ~30 seconds per set + rest time
             estimated_set_time = total_sets * 0.5  # 30 seconds per set
             estimated_total_seconds = estimated_set_time * 60 + total_rest_seconds
+            # Cap estimated duration at 3 hours (10800 seconds) to prevent unrealistic values
+            estimated_total_seconds = min(estimated_total_seconds, 10800)
             workout_duration_hours = estimated_total_seconds / 3600.0
         
-        # Calculate calories using MET formula
-        # Calories = MET × weight_kg × duration_hours
-        calories = met_value * body_weight_kg * workout_duration_hours
+        # Metabolic burn = MET × body_weight × duration_hours
+        metabolic_burn = met_value * body_weight_kg * workout_duration_hours
+        
+        # Total calories = Work Burn + Metabolic Burn
+        calories = work_burn + metabolic_burn
+        
+        # Cap calories at reasonable maximum (e.g., 1500 calories for extreme workouts)
+        max_calories = 1500.0
+        calories = min(calories, max_calories)
+        
+        # Ensure minimum calories for any workout (at least 30 calories)
+        calories = max(calories, 30.0)
         
         calories = round(calories, 2)
         self.calories_burned = calories
@@ -286,6 +317,9 @@ class ExerciseSet(TimestampedModel):
     rest_time_before_set = models.PositiveIntegerField(default=0)
     is_warmup = models.BooleanField(default=False)
     reps_in_reserve = models.PositiveIntegerField(default=0)
+    eccentric_time = models.PositiveIntegerField(null=True, blank=True)  # Time under tension - eccentric phase (seconds)
+    concentric_time = models.PositiveIntegerField(null=True, blank=True)  # Time under tension - concentric phase (seconds)
+    total_tut = models.PositiveIntegerField(null=True, blank=True)  # Total time under tension (seconds) - optional
 
     class Meta:
         ordering = ['set_number']

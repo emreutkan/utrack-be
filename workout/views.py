@@ -134,7 +134,8 @@ def get_rest_timer_state(workout):
         return {
             "last_set_timestamp": None,
             "last_exercise_category": None,
-            "elapsed_seconds": 0
+            "elapsed_seconds": 0,
+            "is_paused": False
         }
     
     # Find the most recent set across all exercises in the workout
@@ -149,16 +150,23 @@ def get_rest_timer_state(workout):
         return {
             "last_set_timestamp": None,
             "last_exercise_category": None,
-            "elapsed_seconds": 0
+            "elapsed_seconds": 0,
+            "is_paused": False
         }
     
     # Get the exercise category from the workout exercise
     exercise = last_set.workout_exercise.exercise
     category = exercise.category if exercise and exercise.category else 'isolation'
     
-    # Calculate elapsed time
-    now = timezone.now()
-    elapsed_seconds = int((now - last_set.created_at).total_seconds())
+    # Calculate elapsed time - if paused, use paused timestamp, otherwise use current time
+    is_paused = workout.rest_timer_paused_at is not None
+    if is_paused:
+        # Timer is paused - calculate elapsed from last_set to when it was paused
+        elapsed_seconds = int((workout.rest_timer_paused_at - last_set.created_at).total_seconds())
+    else:
+        # Timer is running - calculate elapsed from last_set to now
+        now = timezone.now()
+        elapsed_seconds = int((now - last_set.created_at).total_seconds())
     
     # Determine rest status
     rest_status = calculate_rest_status(elapsed_seconds, category)
@@ -167,7 +175,8 @@ def get_rest_timer_state(workout):
         "last_set_timestamp": last_set.created_at.isoformat(),
         "last_exercise_category": category,
         "elapsed_seconds": elapsed_seconds,
-        "rest_status": rest_status
+        "rest_status": rest_status,
+        "is_paused": is_paused
     }
 
 # Create your views here.
@@ -411,6 +420,10 @@ class AddExerciseSetToWorkoutExerciseView(APIView):
             
             # Recalculate recovery if workout is completed
             workout = workout_exercise.workout
+            # Reset rest timer pause when new set is added
+            if workout.rest_timer_paused_at:
+                workout.rest_timer_paused_at = None
+                workout.save(update_fields=['rest_timer_paused_at'])
             recalculate_workout_metrics(workout)
             
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -982,12 +995,52 @@ class GetRestTimerStateView(APIView):
                 return Response({
                     "last_set_timestamp": None,
                     "last_exercise_category": None,
-                    "elapsed_seconds": 0
+                    "elapsed_seconds": 0,
+                    "is_paused": False
                 })
             
             # Get rest timer state
             state = get_rest_timer_state(workout)
             return Response(state)
+            
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+class StopRestTimerView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """
+        GET /api/workout/active/rest-timer/stop
+        Halts/pauses the rest timer for the active workout.
+        Timer will reset when a new set is added.
+        """
+        try:
+            # Get active workout
+            workout = Workout.objects.filter(
+                user=request.user,
+                is_done=False
+            ).first()
+            
+            if not workout:
+                return Response({
+                    'error': 'No active workout found'
+                }, status=status.HTTP_404_NOT_FOUND)
+            
+            # Pause the rest timer by setting paused_at to current time
+            if not workout.rest_timer_paused_at:
+                workout.rest_timer_paused_at = timezone.now()
+                workout.save(update_fields=['rest_timer_paused_at'])
+            
+            # Return current state
+            state = get_rest_timer_state(workout)
+            return Response({
+                'message': 'Rest timer paused',
+                **state
+            })
             
         except Exception as e:
             return Response(
@@ -1250,7 +1303,7 @@ class GetMuscleRecoveryStatusView(APIView):
     def get(self, request):
         """
         Get current recovery status for all muscle groups.
-        Returns the most recent recovery record for each muscle group.
+        Returns recovery status for ALL muscle groups - those in recovery and those fully recovered.
         """
         # Get all unique muscle groups
         from exercise.models import Exercise
@@ -1271,16 +1324,35 @@ class GetMuscleRecoveryStatusView(APIView):
         
         # Group by muscle_group and take the first (most recent) for each
         seen_groups = set()
-        recovery_records = []
+        recovery_records = {}
         for record in all_records:
             if record.muscle_group not in seen_groups:
-                recovery_records.append(record)
+                recovery_records[record.muscle_group] = record
                 seen_groups.add(record.muscle_group)
 
-        for record in recovery_records:
-            # Update recovery status
-            record.update_recovery_status()
-            recovery_status[record.muscle_group] = MuscleRecoverySerializer(record).data
+        # Process all muscle groups - return recovery data if exists, otherwise return recovered status
+        for muscle_group in all_muscle_groups:
+            if muscle_group in recovery_records:
+                # Update recovery status
+                record = recovery_records[muscle_group]
+                record.update_recovery_status()
+                recovery_status[muscle_group] = MuscleRecoverySerializer(record).data
+            else:
+                # No recovery record = fully recovered
+                recovery_status[muscle_group] = {
+                    'id': None,
+                    'muscle_group': muscle_group,
+                    'fatigue_score': 0.0,
+                    'total_sets': 0,
+                    'recovery_hours': 0,
+                    'recovery_until': None,
+                    'is_recovered': True,
+                    'source_workout': None,
+                    'hours_until_recovery': 0,
+                    'recovery_percentage': 100,
+                    'created_at': None,
+                    'updated_at': None
+                }
         
         return Response({
             'recovery_status': recovery_status,
