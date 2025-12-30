@@ -11,7 +11,7 @@ from calendar import monthrange
 from collections import defaultdict
 import logging
 from .serializers import CreateWorkoutSerializer, WorkoutExerciseSerializer, ExerciseSetSerializer, GetWorkoutSerializer, UpdateWorkoutSerializer, CreateTemplateWorkoutSerializer, GetTemplateWorkoutSerializer, TrainingResearchSerializer, MuscleRecoverySerializer # Import GetWorkoutSerializer
-from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise, TrainingResearch, MuscleRecovery
+from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise, TrainingResearch, MuscleRecovery, WorkoutMuscleRecovery
 from exercise.models import Exercise
 from django.core.cache import cache
 from django.views.decorators.vary import vary_on_headers
@@ -77,6 +77,105 @@ def calculate_workout_calories(workout):
     Returns: Total calories burned (float)
     """
     return workout.calculate_calories()
+
+def get_current_recovery_progress(user):
+    """
+    Get current recovery progress (percentage) for all muscle groups.
+    Returns dict: {muscle_group: recovery_percentage}
+    """
+    from exercise.models import Exercise
+    all_muscle_groups = [choice[0] for choice in Exercise.MUSCLE_GROUPS]
+    recovery_progress = {}
+    
+    # Get most recent recovery records
+    all_records = MuscleRecovery.objects.filter(
+        user=user,
+        muscle_group__in=all_muscle_groups
+    ).select_related('source_workout').order_by(
+        'muscle_group',
+        '-source_workout__datetime',
+        '-recovery_until'
+    )
+    
+    seen_groups = set()
+    recovery_records = {}
+    for record in all_records:
+        if record.muscle_group not in seen_groups:
+            recovery_records[record.muscle_group] = record
+            seen_groups.add(record.muscle_group)
+    
+    # Calculate recovery percentage for each muscle using non-linear J-curve model
+    # Recovery is NOT linear - performance drops initially, then improves
+    # Based on sports science: inflammation peaks at 24h, protein synthesis peaks 24-48h
+    for muscle_group in all_muscle_groups:
+        if muscle_group in recovery_records:
+            record = recovery_records[muscle_group]
+            record.update_recovery_status()
+            
+            if record.is_recovered or not record.recovery_until:
+                recovery_progress[muscle_group] = 100.0
+            else:
+                workout_time = record.source_workout.datetime if record.source_workout else record.created_at
+                total_duration = record.recovery_until - workout_time
+                elapsed = timezone.now() - workout_time
+                
+                if total_duration.total_seconds() <= 0:
+                    recovery_progress[muscle_group] = 100.0
+                else:
+                    # Non-linear recovery curve (J-curve model)
+                    # 0-24h: Performance drops (inflammation phase) - 0-30% recovery
+                    # 24-48h: Protein synthesis phase - 30-70% recovery
+                    # 48h+: Structural repair completion - 70-100% recovery
+                    linear_progress = elapsed.total_seconds() / total_duration.total_seconds()
+                    
+                    # Apply J-curve transformation
+                    # Early phase (0-0.3): Slower recovery due to inflammation
+                    # Mid phase (0.3-0.7): Accelerated recovery (protein synthesis)
+                    # Late phase (0.7-1.0): Slower final recovery (structural repair)
+                    if linear_progress <= 0.3:
+                        # Inflammation phase - recovery is slower
+                        # At 24h mark, typically only 20-30% recovered despite time passing
+                        non_linear_progress = linear_progress * 0.7  # Reduced recovery in early phase
+                    elif linear_progress <= 0.7:
+                        # Protein synthesis phase - accelerated recovery
+                        # Most recovery happens here (24-48h window)
+                        non_linear_progress = 0.21 + (linear_progress - 0.3) * 1.225  # 0.21 to 0.7
+                    else:
+                        # Final phase - slower completion
+                        non_linear_progress = 0.7 + (linear_progress - 0.7) * 1.0  # 0.7 to 1.0
+                    
+                    percentage = non_linear_progress * 100
+                    recovery_progress[muscle_group] = min(100.0, max(0.0, round(percentage, 2)))
+        else:
+            # No recovery record = fully recovered
+            recovery_progress[muscle_group] = 100.0
+    
+    return recovery_progress
+
+def create_workout_muscle_recovery(user, workout, condition, recovery_progress_dict):
+    """
+    Create WorkoutMuscleRecovery entries for all muscle groups.
+    condition: 'pre' or 'post'
+    recovery_progress_dict: {muscle_group: percentage}
+    """
+    from exercise.models import Exercise
+    all_muscle_groups = [choice[0] for choice in Exercise.MUSCLE_GROUPS]
+    
+    records = []
+    for muscle_group in all_muscle_groups:
+        progress = recovery_progress_dict.get(muscle_group, 100.0)
+        record, created = WorkoutMuscleRecovery.objects.update_or_create(
+            user=user,
+            workout=workout,
+            muscle_group=muscle_group,
+            condition=condition,
+            defaults={
+                'recovery_progress': progress
+            }
+        )
+        records.append(record)
+    
+    return records
 
 def recalculate_workout_metrics(workout):
     """
@@ -282,7 +381,13 @@ class CreateWorkoutView(APIView):
                 
         serializer = CreateWorkoutSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
-            serializer.save()
+            workout = serializer.save()
+            
+            # Create pre-workout muscle recovery entries for new active workouts
+            if not workout.is_done and not workout.is_rest_day:
+                recovery_progress = get_current_recovery_progress(request.user)
+                create_workout_muscle_recovery(request.user, workout, 'pre', recovery_progress)
+            
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -551,6 +656,10 @@ class CompleteWorkoutView(APIView):
             
             # Calculate calories and recovery
             recalculate_workout_metrics(workout)
+            
+            # Create post-workout muscle recovery entries
+            recovery_progress = get_current_recovery_progress(request.user)
+            create_workout_muscle_recovery(request.user, workout, 'post', recovery_progress)
 
             return Response(GetWorkoutSerializer(workout).data, status=status.HTTP_200_OK)
         except Workout.DoesNotExist:
@@ -1528,6 +1637,178 @@ class VolumeAnalysisView(APIView):
             },
             'weeks': weeks_list,
             'summary': summary
+        }, status=status.HTTP_200_OK)
+
+class WorkoutSummaryView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, workout_id):
+        """
+        GET /api/workout/<workout_id>/summary/
+        Returns workout summary with score, positives, negatives, and neutrals.
+        
+        Scoring based on:
+        1. Recovery: Worked muscles that were recovered (positive) vs still recovering (negative)
+        2. 1RM Performance: Higher 1RM (positive), same (neutral), lower (negative)
+        """
+        try:
+            workout = Workout.objects.get(id=workout_id, user=request.user)
+        except Workout.DoesNotExist:
+            return Response({'error': 'Workout not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Get pre-workout recovery data
+        pre_recovery = WorkoutMuscleRecovery.objects.filter(
+            workout=workout,
+            condition='pre'
+        )
+        
+        pre_recovery_dict = {}
+        for record in pre_recovery:
+            pre_recovery_dict[record.muscle_group] = float(record.recovery_progress)
+        
+        # Get muscles worked in this workout
+        from exercise.models import Exercise
+        workout_exercises = WorkoutExercise.objects.filter(workout=workout).select_related('exercise')
+        
+        muscles_worked = set()
+        exercise_1rm_data = {}  # {exercise_id: {'current_1rm': float, 'exercise_name': str}}
+        
+        for workout_exercise in workout_exercises:
+            exercise = workout_exercise.exercise
+            # Add primary muscle
+            if exercise.primary_muscle:
+                muscles_worked.add(exercise.primary_muscle)
+            # Add secondary muscles
+            if exercise.secondary_muscles:
+                for muscle in exercise.secondary_muscles:
+                    if muscle:
+                        muscles_worked.add(muscle)
+            
+            # Get current 1RM for this exercise
+            if workout_exercise.one_rep_max:
+                exercise_1rm_data[exercise.id] = {
+                    'current_1rm': float(workout_exercise.one_rep_max),
+                    'exercise_name': exercise.name,
+                    'exercise_id': exercise.id
+                }
+        
+        # Analyze recovery performance
+        positives = {}
+        negatives = {}
+        neutrals = {}
+        
+        # Recovery analysis
+        for muscle in muscles_worked:
+            pre_recovery_progress = pre_recovery_dict.get(muscle, 100.0)
+            
+            if pre_recovery_progress >= 100.0:
+                # Muscle was fully recovered - positive
+                positives[muscle] = {
+                    'type': 'recovery',
+                    'message': f'{muscle.capitalize()} was fully recovered before workout',
+                    'pre_recovery': pre_recovery_progress
+                }
+            elif pre_recovery_progress < 70.0:
+                # Muscle was still recovering (<70%) - negative
+                negatives[muscle] = {
+                    'type': 'recovery',
+                    'message': f'{muscle.capitalize()} was only {pre_recovery_progress:.1f}% recovered before workout',
+                    'pre_recovery': pre_recovery_progress
+                }
+            else:
+                # Muscle was partially recovered (70-99%) - neutral
+                neutrals[muscle] = {
+                    'type': 'recovery',
+                    'message': f'{muscle.capitalize()} was {pre_recovery_progress:.1f}% recovered before workout',
+                    'pre_recovery': pre_recovery_progress
+                }
+        
+        # 1RM performance analysis
+        for exercise_id, data in exercise_1rm_data.items():
+            current_1rm = data['current_1rm']
+            exercise_name = data['exercise_name']
+            
+            # Get previous 1RM for this exercise (most recent before this workout)
+            workout_datetime = workout.datetime or workout.created_at
+            previous_workout_exercise = WorkoutExercise.objects.filter(
+                exercise_id=exercise_id,
+                workout__user=request.user,
+                workout__is_done=True,
+                one_rep_max__isnull=False
+            ).exclude(workout=workout).order_by('-workout__datetime', '-workout__created_at').first()
+            
+            if previous_workout_exercise and previous_workout_exercise.one_rep_max:
+                previous_1rm = float(previous_workout_exercise.one_rep_max)
+                difference = current_1rm - previous_1rm
+                percent_change = (difference / previous_1rm) * 100 if previous_1rm > 0 else 0
+                
+                if difference > 0:
+                    # Higher 1RM - positive
+                    positives[f'{exercise_name}_1rm'] = {
+                        'type': '1rm',
+                        'message': f'{exercise_name}: 1RM increased from {previous_1rm:.1f}kg to {current_1rm:.1f}kg (+{percent_change:.1f}%)',
+                        'current_1rm': current_1rm,
+                        'previous_1rm': previous_1rm,
+                        'difference': difference,
+                        'percent_change': round(percent_change, 1)
+                    }
+                elif difference < 0:
+                    # Lower 1RM - negative
+                    negatives[f'{exercise_name}_1rm'] = {
+                        'type': '1rm',
+                        'message': f'{exercise_name}: 1RM decreased from {previous_1rm:.1f}kg to {current_1rm:.1f}kg ({percent_change:.1f}%)',
+                        'current_1rm': current_1rm,
+                        'previous_1rm': previous_1rm,
+                        'difference': difference,
+                        'percent_change': round(percent_change, 1)
+                    }
+                else:
+                    # Same 1RM - neutral
+                    neutrals[f'{exercise_name}_1rm'] = {
+                        'type': '1rm',
+                        'message': f'{exercise_name}: 1RM maintained at {current_1rm:.1f}kg',
+                        'current_1rm': current_1rm,
+                        'previous_1rm': previous_1rm,
+                        'difference': 0,
+                        'percent_change': 0
+                    }
+            else:
+                # No previous 1RM - neutral (first time or no data)
+                neutrals[f'{exercise_name}_1rm'] = {
+                    'type': '1rm',
+                    'message': f'{exercise_name}: No previous 1RM data to compare',
+                    'current_1rm': current_1rm,
+                    'previous_1rm': None,
+                    'difference': None,
+                    'percent_change': None
+                }
+        
+        # Calculate score (out of 10)
+        # Base score: 5.0
+        # +0.5 for each positive
+        # -0.5 for each negative
+        # Neutrals don't affect score
+        base_score = 5.0
+        positive_count = len(positives)
+        negative_count = len(negatives)
+        
+        score = base_score + (positive_count * 0.5) - (negative_count * 0.5)
+        # Cap score between 0 and 10
+        score = max(0.0, min(10.0, score))
+        
+        return Response({
+            'workout_id': workout.id,
+            'score': round(score, 1),
+            'positives': positives,
+            'negatives': negatives,
+            'neutrals': neutrals,
+            'summary': {
+                'total_positives': positive_count,
+                'total_negatives': negative_count,
+                'total_neutrals': len(neutrals),
+                'muscles_worked': sorted(list(muscles_worked)),
+                'exercises_performed': len(exercise_1rm_data)
+            }
         }, status=status.HTTP_200_OK)
 
     
