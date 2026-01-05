@@ -1,4 +1,3 @@
-version: '3.8'
 ## github-actions will create the .env
 services:
     db:
