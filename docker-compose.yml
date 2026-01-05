@@ -1,6 +1,8 @@
 ## github-actions will create the .env
 services:
     db:
+        networks:
+            - utrack-network
         image: postgres:16 # postgres:16-alpine
         profiles: ["postgres"]  # Only start when explicitly requested
         environment:
@@ -20,6 +22,8 @@ services:
             start_period: 30s
 
     web:
+        networks:
+            - utrack-network
         profiles: ["postgres"]  # Only start when explicitly requested
         build:
             context: . # context is the root directory of the project
@@ -48,6 +52,8 @@ services:
                 condition: service_healthy # check if db service is healthy
 
     nginx:
+        networks:
+            - utrack-network
         profiles: ["postgres"]  # Only start when explicitly requested
         image: nginx:alpine
         ports:
@@ -62,6 +68,10 @@ services:
                 condition: service_healthy
         restart: unless-stopped
 
-
+networks:
+    utrack-network:
+        driver: bridge
+        driver_opts:
+            com.docker.network.driver.mtu: 1500
 volumes: # volumes are used to persist data across container restarts
     db_data: # db data volume : /var/lib/postgresql/data
