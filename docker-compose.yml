@@ -13,12 +13,14 @@ services:
             - "5432:5432" # postgres port
         healthcheck:
             # postgres healthcheck
-            test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+            test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]   
             interval: 10s
             timeout: 5s
-            retries: 5
+            retries: 10
+            start_period: 30s
 
     web:
+        profiles: ["postgres"]  # Only start when explicitly requested
         build:
             context: . # context is the root directory of the project
             dockerfile: Dockerfile
@@ -36,16 +38,17 @@ services:
             DATABASE_URL: ${DATABASE_URL} # database url: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
             LOCALHOST: ${LOCALHOST} # localhost: true or false
         healthcheck:
-            test: ["CMD", "python", "-c", "import urllib.request; import urllib.error; try: r = urllib.request.urlopen('http://localhost:8000/', timeout=3); exit(0 if r.getcode() < 500 else 1); except urllib.error.HTTPError as e: exit(0 if e.code < 500 else 1); except: exit(1)"]
+            test: ["CMD", "python", "-c", "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.connect(('localhost', 8000))"]
             interval: 10s
             timeout: 5s
             retries: 5
-            start_period: 40s
+            start_period: 20s
         depends_on: # before web service starts, db service must be healthy
             db: # db service
                 condition: service_healthy # check if db service is healthy
 
     nginx:
+        profiles: ["postgres"]  # Only start when explicitly requested
         image: nginx:alpine
         ports:
             - "80:80"
