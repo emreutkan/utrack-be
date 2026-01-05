@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import CreateWorkoutView, AddExerciseToWorkoutView, AddExerciseSetToWorkoutExerciseView, GetWorkoutView, GetActiveWorkoutView, DeleteExerciseSetView, DeleteWorkoutExerciseView, UpdateExerciseOrderView, CompleteWorkoutView, DeleteWorkoutView, CheckWorkoutPerformedTodayView, CreateTemplateWorkoutView, GetTemplateWorkoutsView, StartTemplateWorkoutView, UpdateWorkoutView, UpdateExerciseSetView, GetRestTimerStateView, CalendarView, GetAvailableYearsView, CalendarStatsView, GetExercise1RMHistoryView, GetRecoveryRecommendationsView, GetRestPeriodRecommendationsView, GetTrainingFrequencyRecommendationsView, GetRelevantResearchView, GetMuscleRecoveryStatusView, VolumeAnalysisView
+from .views import CreateWorkoutView, AddExerciseToWorkoutView, AddExerciseSetToWorkoutExerciseView, GetWorkoutView, GetActiveWorkoutView, DeleteExerciseSetView, DeleteWorkoutExerciseView, UpdateExerciseOrderView, CompleteWorkoutView, DeleteWorkoutView, CheckWorkoutPerformedTodayView, CreateTemplateWorkoutView, GetTemplateWorkoutsView, StartTemplateWorkoutView, UpdateWorkoutView, UpdateExerciseSetView, GetRestTimerStateView, StopRestTimerView, CalendarView, GetAvailableYearsView, CalendarStatsView, GetExercise1RMHistoryView, GetRecoveryRecommendationsView, GetRestPeriodRecommendationsView, GetTrainingFrequencyRecommendationsView, GetRelevantResearchView, GetMuscleRecoveryStatusView, VolumeAnalysisView, WorkoutSummaryView
 urlpatterns = [
     path('create/', CreateWorkoutView.as_view(), name='create-workout'),
     path('list/', GetWorkoutView.as_view(), name='list-workouts'),
@@ -7,6 +7,7 @@ urlpatterns = [
     path('exercise/<int:workout_exercise_id>/add_set/', AddExerciseSetToWorkoutExerciseView.as_view(), name='add-set'),
     path('active/', GetActiveWorkoutView.as_view(), name='get-active-workout'),
     path('active/rest-timer/', GetRestTimerStateView.as_view(), name='rest-timer-state'),
+    path('active/rest-timer/stop/', StopRestTimerView.as_view(), name='stop-rest-timer'),
     path('list/<int:workout_id>/', GetWorkoutView.as_view(), name='get-workout'),
     # Calendar endpoints
     path('calendar/', CalendarView.as_view(), name='calendar-view'),
@@ -28,6 +29,7 @@ urlpatterns = [
     path('<int:workout_id>/update_order/', UpdateExerciseOrderView.as_view(), name='update-exercise-order'),
     path('<int:workout_id>/update/', UpdateWorkoutView.as_view(), name='update-workout'),
     path('<int:workout_id>/complete/', CompleteWorkoutView.as_view(), name='complete-workout'),
+    path('<int:workout_id>/summary/', WorkoutSummaryView.as_view(), name='workout-summary'),
     path('<int:workout_id>/delete/', DeleteWorkoutView.as_view(), name='delete-workout'),
     path('check-today/', CheckWorkoutPerformedTodayView.as_view(), name='check-workout-performed-today'),
     # Template workout endpoints

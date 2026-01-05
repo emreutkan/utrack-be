@@ -17,19 +17,27 @@ class Workout(TimestampedModel):
     is_done = models.BooleanField(default=False) ## is_done is a boolean field that indicates whether the workout has been completed
     is_rest_day = models.BooleanField(default=False) ## is_rest_day marks the workout as a rest day but it still counts as a workout
     calories_burned = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True) ## calories burned during the workout
+    rest_timer_paused_at = models.DateTimeField(null=True, blank=True) ## timestamp when rest timer was paused/halted
 ##    body_parts_worked = models.JSONField(default=list, blank=True, null=True) ## body_parts_worked is a json field that contains the body parts worked in the workout
     
     def calculate_calories(self):
         """
-        Calculate calories burned using MET (Metabolic Equivalent of Task) method.
+        Calculate calories burned using simplified volume-based formula for strength training.
         
-        Formula: Calories = MET × weight_kg × duration_hours
+        Formula: Calories = Total Volume (kg) × Multiplier
         
-        MET Values:
-        - Light Effort (3.0): Small isolation moves with long rests
-        - Moderate/General (3.5): Standard gym routine, mixing machines and free weights
-        - Vigorous/Bodybuilding (6.0): High intensity, heavy weights, short rest
-        - Powerlifting (5.0): Very heavy loads but very long rest periods
+        The multiplier already includes:
+        - Mechanical work (lifting the weight)
+        - Metabolic cost (isometric contraction, eccentric phase, EPOC)
+        - Rest periods (elevated heart rate between sets)
+        
+        Multipliers:
+        - Compound exercises: 0.007 (e.g., rows, squats, deadlifts)
+        - Isolation exercises: 0.004 (e.g., curls, tricep extensions)
+        - Mixed workouts: Weighted average based on compound ratio
+        
+        Example: 2 sets × 8 reps × 150kg = 2,400kg volume
+        Compound: 2,400 × 0.007 = 16.8 calories
         
         Returns the calculated calories.
         """
@@ -51,17 +59,24 @@ class Workout(TimestampedModel):
             self.save(update_fields=['calories_burned'])
             return 0.0
         
-        # Analyze workout to determine MET value
+        # Step 1: Calculate Total Work Volume
+        total_volume_kg = 0.0  # Total weight × reps in kg
         total_sets = 0
-        total_rest_seconds = 0
         compound_count = 0
         isolation_count = 0
-        total_volume = 0.0  # Total weight × reps
         max_weight = 0.0
+        total_rest_seconds = 0
+        
+        # Track exercise types for difficulty multiplier
+        high_difficulty_exercises = ['deadlift', 'squat', 'thruster']  # Exercises with 1.2x multiplier
         
         for workout_exercise in workout_exercises:
             exercise = workout_exercise.exercise
             sets = workout_exercise.sets.all()
+            
+            # Check if exercise is high difficulty
+            exercise_name_lower = exercise.name.lower()
+            is_high_difficulty = any(term in exercise_name_lower for term in high_difficulty_exercises)
             
             if exercise.category == 'compound':
                 compound_count += 1
@@ -77,53 +92,43 @@ class Workout(TimestampedModel):
                 reps = exercise_set.reps if exercise_set.reps else 0
                 
                 if weight_kg > 0 and reps > 0:
-                    total_volume += weight_kg * reps
+                    # Calculate volume for this set
+                    set_volume = weight_kg * reps
+                    total_volume_kg += set_volume
                     max_weight = max(max_weight, weight_kg)
                 
                 if exercise_set.rest_time_before_set:
                     total_rest_seconds += exercise_set.rest_time_before_set
         
-        # Calculate average rest time per set
-        avg_rest_seconds = total_rest_seconds / total_sets if total_sets > 0 else 0
-        avg_rest_minutes = avg_rest_seconds / 60.0
+        # Calculate calories using simplified volume-based formula
+        # The 0.007 constant for compound exercises already factors in:
+        # - Work calories (2.5-3 kcal per 1000kg)
+        # - Metabolic cost multiplier (2.5-3x for isometric, eccentric, rest periods)
+        # - Average rest for compound lifts
+        compound_ratio = compound_count / (compound_count + isolation_count) if (compound_count + isolation_count) > 0 else 0.5
         
-        # Determine MET value based on workout characteristics
-        # Use workout intensity if explicitly set, otherwise calculate
-        if self.intensity == 'high':
-            met_value = 6.0  # Vigorous/Bodybuilding
-        elif self.intensity == 'low':
-            met_value = 3.0  # Light Effort
+        # Determine multiplier based on exercise type
+        # Compound exercises: 0.007 (includes work + metabolic cost + rest)
+        # Isolation exercises: 0.004 (lower metabolic cost, less EPOC)
+        if compound_ratio >= 0.7:
+            # Mostly compound exercises
+            calories_per_kg = 0.007
+        elif compound_ratio >= 0.4:
+            # Mixed - use weighted average
+            calories_per_kg = (compound_ratio * 0.007) + ((1 - compound_ratio) * 0.004)
         else:
-            # Auto-determine based on workout characteristics
-            compound_ratio = compound_count / (compound_count + isolation_count) if (compound_count + isolation_count) > 0 else 0
-            
-            # Powerlifting: Very heavy weights with long rest (>3 min average)
-            if max_weight > 100 and avg_rest_minutes > 3.0:
-                met_value = 5.0
-            # Vigorous/Bodybuilding: High compound ratio, heavy weights, short rest
-            elif compound_ratio > 0.5 and max_weight > 50 and avg_rest_minutes < 2.0:
-                met_value = 6.0
-            # Moderate: Standard gym routine
-            elif compound_ratio > 0.3 or total_sets > 15:
-                met_value = 3.5
-            # Light: Mostly isolation, long rests
-            else:
-                met_value = 3.0
+            # Mostly isolation exercises
+            calories_per_kg = 0.004
         
-        # Use workout duration (in seconds), convert to hours
-        # Duration should include rest time (total time from start to finish)
-        workout_duration_hours = self.duration / 3600.0 if self.duration > 0 else 0
+        # Simple formula: Total Volume × Calories per kg
+        calories = total_volume_kg * calories_per_kg
         
-        # If duration is not set or seems too short, estimate from sets and rest
-        if workout_duration_hours < 0.1:  # Less than 6 minutes
-            # Estimate: ~30 seconds per set + rest time
-            estimated_set_time = total_sets * 0.5  # 30 seconds per set
-            estimated_total_seconds = estimated_set_time * 60 + total_rest_seconds
-            workout_duration_hours = estimated_total_seconds / 3600.0
+        # Cap calories at reasonable maximum (e.g., 1500 calories for extreme workouts)
+        max_calories = 1500.0
+        calories = min(calories, max_calories)
         
-        # Calculate calories using MET formula
-        # Calories = MET × weight_kg × duration_hours
-        calories = met_value * body_weight_kg * workout_duration_hours
+        # Ensure minimum calories for any workout (at least 30 calories)
+        calories = max(calories, 30.0)
         
         calories = round(calories, 2)
         self.calories_burned = calories
@@ -133,7 +138,7 @@ class Workout(TimestampedModel):
     def calculate_muscle_recovery(self):
         """
         Calculate fatigue scores and recovery times for all muscles worked in this workout.
-        Creates MuscleRecovery records for each muscle group.
+        Based on sports science research: recovery is non-linear, exercise-specific, and multi-system.
         
         Fatigue Score Formula:
         - Base: 1.0 per set
@@ -141,11 +146,20 @@ class Workout(TimestampedModel):
         - Exercise Type: Compound = 1.2x, Isolation = 0.8x
         - Rest Time: <60s = +0.2x (metabolic stress), >3min = +0.1x (CNS fatigue)
         
-        Recovery Hours Formula:
-        - Baseline: 24 hours
-        - Muscle Size: Large (quads, back, chest) = +12h, Small (biceps, calves, rear delts) = -6h
-        - Volume Penalty: >8 sets = +12h, >15 sets = +24h
-        - Metabolic Fatigue: Short rest on compound = +4h
+        Recovery Hours Formula (Exercise-Specific):
+        - Small muscles (biceps, calves): 36h base (faster protein synthesis)
+        - Large muscles (quads, back, chest): 48h base (more structural damage)
+        - Medium muscles (shoulders): 42h base
+        - Fatigue multiplier: High fatigue (>20) = 1.5x, Moderate (>12) = 1.3x, Low (>6) = 1.1x
+        - Volume penalty: >8 sets = +12h, >15 sets = +24h
+        - Metabolic fatigue: Short rest on compound = +6h
+        - Novelty penalty: Exercise not done in 4+ weeks = +12h (unaccustomed exercise causes more damage)
+        - Eccentric emphasis: If eccentric_time is set = +8h (extends structural repair phase, more micro-tears)
+        
+        Recovery follows J-curve (non-linear):
+        - 0-24h: Inflammation phase (slower recovery, 0-30%)
+        - 24-48h: Protein synthesis peak (accelerated recovery, 30-70%)
+        - 48h+: Structural repair completion (70-100%)
         """
         
         # Muscle size categories
@@ -156,7 +170,12 @@ class Workout(TimestampedModel):
         workout_exercises = WorkoutExercise.objects.filter(workout=self).select_related('exercise').prefetch_related('sets')
         
         # Dictionary to accumulate fatigue per muscle
-        muscle_fatigue = {}  # {muscle_group: {'fatigue_score': float, 'sets': int, 'has_short_rest_compound': bool}}
+        # Track: fatigue_score, sets, has_short_rest_compound, has_eccentric_emphasis, is_novel_exercise
+        muscle_fatigue = {}  # {muscle_group: {'fatigue_score': float, 'sets': int, 'has_short_rest_compound': bool, 'has_eccentric_emphasis': bool, 'is_novel_exercise': bool}}
+        
+        # Check for novel exercises (not done in 4+ weeks) per muscle group
+        workout_datetime = self.datetime or self.created_at
+        four_weeks_ago = workout_datetime - timezone.timedelta(weeks=4)
         
         for workout_exercise in workout_exercises:
             exercise = workout_exercise.exercise
@@ -166,16 +185,32 @@ class Workout(TimestampedModel):
             if not sets.exists():
                 continue
             
+            # Check if this exercise is novel (not done in 4+ weeks)
+            # Check if this specific exercise was done recently
+            recent_workout_exercises = WorkoutExercise.objects.filter(
+                exercise=exercise,
+                workout__user=self.user,
+                workout__datetime__gte=four_weeks_ago,
+                workout__datetime__lt=workout_datetime
+            ).exists()
+            is_novel = not recent_workout_exercises
+            
             # Determine exercise type multiplier
             exercise_multiplier = 1.2 if exercise.category == 'compound' else 0.8
             
             # Track if this exercise has short rest (for metabolic fatigue bonus)
             has_short_rest = False
+            # Track if any sets have eccentric emphasis (eccentric_time is not null)
+            has_eccentric_emphasis = False
             
             for exercise_set in sets:
                 # Skip warmup sets
                 if exercise_set.is_warmup:
                     continue
+                
+                # Check for eccentric emphasis (eccentric_time is not null)
+                if exercise_set.eccentric_time is not None and exercise_set.eccentric_time > 0:
+                    has_eccentric_emphasis = True
                 
                 # Calculate RIR multiplier
                 rir = exercise_set.reps_in_reserve if exercise_set.reps_in_reserve else 0
@@ -204,23 +239,44 @@ class Workout(TimestampedModel):
                 # Distribute to primary muscle (100%)
                 primary_muscle = exercise.primary_muscle
                 if primary_muscle not in muscle_fatigue:
-                    muscle_fatigue[primary_muscle] = {'fatigue_score': 0.0, 'sets': 0, 'has_short_rest_compound': False}
+                    muscle_fatigue[primary_muscle] = {
+                        'fatigue_score': 0.0, 
+                        'sets': 0, 
+                        'has_short_rest_compound': False,
+                        'has_eccentric_emphasis': False,
+                        'is_novel_exercise': False
+                    }
                 
                 muscle_fatigue[primary_muscle]['fatigue_score'] += set_fatigue
                 muscle_fatigue[primary_muscle]['sets'] += 1
                 if has_short_rest:
                     muscle_fatigue[primary_muscle]['has_short_rest_compound'] = True
+                if has_eccentric_emphasis:
+                    muscle_fatigue[primary_muscle]['has_eccentric_emphasis'] = True
+                if is_novel:
+                    muscle_fatigue[primary_muscle]['is_novel_exercise'] = True
                 
                 # Distribute to secondary muscles (40%)
                 secondary_muscles = exercise.secondary_muscles or []
                 for secondary_muscle in secondary_muscles:
                     if secondary_muscle not in muscle_fatigue:
-                        muscle_fatigue[secondary_muscle] = {'fatigue_score': 0.0, 'sets': 0, 'has_short_rest_compound': False}
+                        muscle_fatigue[secondary_muscle] = {
+                            'fatigue_score': 0.0, 
+                            'sets': 0, 
+                            'has_short_rest_compound': False,
+                            'has_eccentric_emphasis': False,
+                            'is_novel_exercise': False
+                        }
                     
                     muscle_fatigue[secondary_muscle]['fatigue_score'] += set_fatigue * 0.4
                     muscle_fatigue[secondary_muscle]['sets'] += 1
+                    if has_eccentric_emphasis:
+                        muscle_fatigue[secondary_muscle]['has_eccentric_emphasis'] = True
+                    if is_novel:
+                        muscle_fatigue[secondary_muscle]['is_novel_exercise'] = True
         
         # Calculate recovery hours for each muscle and create MuscleRecovery records
+        # Based on sports science: recovery is non-linear, exercise-specific, and involves multiple systems
         workout_datetime = self.datetime or self.created_at
         recovery_records = []
         
@@ -228,25 +284,55 @@ class Workout(TimestampedModel):
             fatigue_score = data['fatigue_score']
             total_sets = data['sets']
             has_short_rest_compound = data['has_short_rest_compound']
+            has_eccentric_emphasis = data.get('has_eccentric_emphasis', False)
+            is_novel_exercise = data.get('is_novel_exercise', False)
             
-            # Base recovery hours
-            recovery_hours = 24
-            
-            # Muscle size adjustment
+            # Base recovery hours - varies by muscle size and exercise type
+            # Small muscles (biceps, calves) recover faster: 24-36h for protein synthesis
+            # Large muscles (quads, back) need more time: 48-72h for full recovery
             if muscle_group in LARGE_MUSCLES:
-                recovery_hours += 12
+                base_recovery = 48  # Large muscles need more time for structural repair
             elif muscle_group in SMALL_MUSCLES:
-                recovery_hours -= 6
+                base_recovery = 36  # Small muscles recover faster
+            else:
+                base_recovery = 42  # Medium muscles (shoulders, etc.)
             
-            # Volume penalty
+            # Fatigue-based adjustment (more fatigue = longer recovery)
+            # High fatigue (failure sets, high volume) extends recovery significantly
+            fatigue_multiplier = 1.0
+            if fatigue_score > 20:  # Very high fatigue
+                fatigue_multiplier = 1.5
+            elif fatigue_score > 12:  # High fatigue
+                fatigue_multiplier = 1.3
+            elif fatigue_score > 6:  # Moderate fatigue
+                fatigue_multiplier = 1.1
+            
+            recovery_hours = base_recovery * fatigue_multiplier
+            
+            # Volume penalty (more sets = more damage = longer recovery)
+            # Research shows >15 sets can extend recovery to 72-96h for large muscles
             if total_sets > 15:
-                recovery_hours += 24
+                recovery_hours += 24  # Significant volume extension
             elif total_sets > 8:
-                recovery_hours += 12
+                recovery_hours += 12  # Moderate volume extension
             
-            # Metabolic fatigue bonus (short rest on compound)
+            # Metabolic fatigue (short rest on compound = more systemic stress)
             if has_short_rest_compound:
-                recovery_hours += 4
+                recovery_hours += 6  # Metabolic stress extends recovery
+            
+            # Novelty penalty: Unaccustomed exercise (not done in 4+ weeks) causes more damage
+            # Research shows novel exercises cause significantly more structural damage
+            if is_novel_exercise:
+                recovery_hours += 12  # +12h penalty for novel exercises
+            
+            # Eccentric emphasis: Heavy negatives extend structural repair phase (48h+)
+            # Eccentrics cause the most mechanical tension and micro-tears
+            # Only applies if eccentric_time is not null in database
+            if has_eccentric_emphasis:
+                recovery_hours += 8  # Extends structural repair phase
+            
+            # Cap recovery at reasonable maximum (96 hours for extreme cases)
+            recovery_hours = min(recovery_hours, 96)
             
             # Calculate recovery_until timestamp
             recovery_until = workout_datetime + timezone.timedelta(hours=recovery_hours)
@@ -286,6 +372,9 @@ class ExerciseSet(TimestampedModel):
     rest_time_before_set = models.PositiveIntegerField(default=0)
     is_warmup = models.BooleanField(default=False)
     reps_in_reserve = models.PositiveIntegerField(default=0)
+    eccentric_time = models.PositiveIntegerField(null=True, blank=True)  # Time under tension - eccentric phase (seconds)
+    concentric_time = models.PositiveIntegerField(null=True, blank=True)  # Time under tension - concentric phase (seconds)
+    total_tut = models.PositiveIntegerField(null=True, blank=True)  # Total time under tension (seconds) - optional
 
     class Meta:
         ordering = ['set_number']
@@ -389,3 +478,26 @@ class MuscleRecovery(TimestampedModel):
             self.is_recovered = timezone.now() >= self.recovery_until
             self.save(update_fields=['is_recovered'])
         return self.is_recovered
+
+class WorkoutMuscleRecovery(TimestampedModel):
+    """
+    Tracks muscle recovery progress before and after workouts.
+    Creates entries when workout starts (pre) and when workout completes (post).
+    """
+    CONDITION_CHOICES = [
+        ('pre', 'Pre-Workout'),
+        ('post', 'Post-Workout'),
+    ]
+    
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
+    workout = models.ForeignKey(Workout, on_delete=models.CASCADE, related_name='muscle_recovery_records')
+    muscle_group = models.CharField(max_length=50, choices=Exercise.MUSCLE_GROUPS)
+    condition = models.CharField(max_length=10, choices=CONDITION_CHOICES)  # 'pre' or 'post'
+    recovery_progress = models.DecimalField(max_digits=5, decimal_places=2)  # Percentage 0-100
+    
+    class Meta:
+        ordering = ['-created_at']
+        unique_together = [['user', 'workout', 'muscle_group', 'condition']]  # One record per muscle per condition per workout
+    
+    def __str__(self):
+        return f"{self.user.email} - {self.workout.id} - {self.muscle_group} - {self.condition} - {self.recovery_progress}%"

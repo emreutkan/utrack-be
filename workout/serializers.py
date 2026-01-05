@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise, TrainingResearch, MuscleRecovery
+from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise, TrainingResearch, MuscleRecovery, WorkoutMuscleRecovery
 from django.utils import timezone
 from datetime import datetime
 from exercise.serializers import ExerciseSerializer
@@ -81,10 +81,10 @@ class CompleteWorkoutSerializer(serializers.ModelSerializer):
         # instance.created_at is the "Start Time"
         time_diff = timezone.now() - instance.created_at
         
-        # total_seconds() gives precise diff. /60 for minutes.
-        # Using int() creates a floor value (25.9 mins -> 25 mins)
-        # Using round() is better (25.9 -> 26 mins)
-        validated_data['duration'] = int(time_diff.total_seconds() / 60) 
+        # Duration is stored in SECONDS (as per model definition)
+        # Cap duration at 6 hours (21600 seconds) to prevent unrealistic values
+        duration_seconds = int(time_diff.total_seconds())
+        validated_data['duration'] = min(duration_seconds, 21600)  # Max 6 hours 
         
         # 3. Calculate Intensity (Placeholder logic)
         # instance.intensity = calculate_intensity(instance)
@@ -92,9 +92,16 @@ class CompleteWorkoutSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 class ExerciseSetSerializer(serializers.ModelSerializer):
+    reps = serializers.IntegerField(min_value=0, max_value=100)
+    reps_in_reserve = serializers.IntegerField(min_value=0, max_value=100)
+    rest_time_before_set = serializers.IntegerField(min_value=0, max_value=10800)  # Max 3 hours (10800 seconds)
+    total_tut = serializers.IntegerField(min_value=0, max_value=600, required=False, allow_null=True)  # Max 10 minutes (600 seconds)
+    eccentric_time = serializers.IntegerField(min_value=0, max_value=600, required=False, allow_null=True)  # Max 10 minutes (600 seconds)
+    concentric_time = serializers.IntegerField(min_value=0, max_value=600, required=False, allow_null=True)  # Max 10 minutes (600 seconds)
+    
     class Meta:
         model = ExerciseSet
-        fields = ['id', 'workout_exercise', 'set_number', 'reps', 'weight', 'rest_time_before_set', 'is_warmup', 'reps_in_reserve']
+        fields = ['id', 'workout_exercise', 'set_number', 'reps', 'weight', 'rest_time_before_set', 'is_warmup', 'reps_in_reserve', 'eccentric_time', 'concentric_time', 'total_tut']
         read_only_fields = ['id']
 
 class WorkoutExerciseSerializer(serializers.ModelSerializer):
@@ -139,6 +146,12 @@ class UpdateWorkoutSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
+class WorkoutMuscleRecoverySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WorkoutMuscleRecovery
+        fields = ['muscle_group', 'condition', 'recovery_progress', 'created_at']
+        read_only_fields = ['created_at']
+
 class GetWorkoutSerializer(serializers.ModelSerializer):
     # Add this field to fetch related exercises
     # Note: 'workoutexercise_set' is the default related name. 
@@ -147,10 +160,11 @@ class GetWorkoutSerializer(serializers.ModelSerializer):
     total_volume = serializers.SerializerMethodField()
     primary_muscles_worked = serializers.SerializerMethodField()
     secondary_muscles_worked = serializers.SerializerMethodField()
+    muscle_recovery_pre_workout = serializers.SerializerMethodField()
 
     class Meta:
         model = Workout
-        fields = ['id', 'title', 'datetime', 'duration', 'intensity', 'notes', 'is_done', 'is_rest_day', 'calories_burned', 'created_at', 'updated_at', 'exercises', 'total_volume', 'primary_muscles_worked', 'secondary_muscles_worked']
+        fields = ['id', 'title', 'datetime', 'duration', 'intensity', 'notes', 'is_done', 'is_rest_day', 'calories_burned', 'created_at', 'updated_at', 'exercises', 'total_volume', 'primary_muscles_worked', 'secondary_muscles_worked', 'muscle_recovery_pre_workout']
         read_only_fields = ['id', 'created_at', 'updated_at']
     
     def get_total_volume(self, obj):
@@ -183,6 +197,20 @@ class GetWorkoutSerializer(serializers.ModelSerializer):
                     if muscle:
                         secondary_muscles.add(muscle)
         return sorted(list(secondary_muscles))
+    
+    def get_muscle_recovery_pre_workout(self, obj):
+        """Get pre-workout muscle recovery data for this workout"""
+        pre_recovery = WorkoutMuscleRecovery.objects.filter(
+            workout=obj,
+            condition='pre'
+        )
+        if pre_recovery.exists():
+            # Convert to dict format: {muscle_group: recovery_progress}
+            recovery_dict = {}
+            for record in pre_recovery:
+                recovery_dict[record.muscle_group] = float(record.recovery_progress)
+            return recovery_dict
+        return {}
 
 class TemplateWorkoutExerciseSerializer(serializers.ModelSerializer):
     exercise = ExerciseSerializer(read_only=True)
@@ -296,7 +324,10 @@ class MuscleRecoverySerializer(serializers.ModelSerializer):
         return 0
     
     def get_recovery_percentage(self, obj):
-        """Calculate recovery percentage (0-100)"""
+        """
+        Calculate recovery percentage using non-linear J-curve model.
+        Recovery is NOT linear - follows inflammation → protein synthesis → structural repair phases.
+        """
         if not obj.recovery_until or obj.is_recovered:
             return 100
         
@@ -308,5 +339,22 @@ class MuscleRecoverySerializer(serializers.ModelSerializer):
         if total_duration.total_seconds() <= 0:
             return 100
         
-        percentage = (elapsed.total_seconds() / total_duration.total_seconds()) * 100
+        # Non-linear recovery curve (J-curve model)
+        # 0-24h: Inflammation phase - slower recovery (0-30%)
+        # 24-48h: Protein synthesis phase - accelerated recovery (30-70%)
+        # 48h+: Structural repair - final recovery (70-100%)
+        linear_progress = elapsed.total_seconds() / total_duration.total_seconds()
+        
+        # Apply J-curve transformation
+        if linear_progress <= 0.3:
+            # Early phase - inflammation, slower recovery
+            non_linear_progress = linear_progress * 0.7
+        elif linear_progress <= 0.7:
+            # Mid phase - protein synthesis, accelerated recovery
+            non_linear_progress = 0.21 + (linear_progress - 0.3) * 1.225
+        else:
+            # Final phase - structural repair completion
+            non_linear_progress = 0.7 + (linear_progress - 0.7) * 1.0
+        
+        percentage = non_linear_progress * 100
         return min(100, max(0, round(percentage, 1)))
