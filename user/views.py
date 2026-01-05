@@ -15,6 +15,8 @@ from rest_framework.pagination import PageNumberPagination
 from django.utils import timezone
 from datetime import date
 from body_measurements.models import BodyMeasurement
+import re
+import html
 
 User = get_user_model()
 
@@ -386,3 +388,288 @@ class DeleteWeightView(APIView):
             response_data['bodyfat_deleted'] = deleted_bodyfat
         
         return Response(response_data, status=status.HTTP_200_OK)
+
+
+def check_xss_injection(text):
+    """
+    Check for XSS and injection patterns in text.
+    Returns list of detected threats.
+    """
+    threats = []
+    
+    if not text:
+        return threats
+    
+    # XSS patterns
+    xss_patterns = [
+        r'<script[^>]*>.*?</script>',
+        r'javascript:',
+        r'on\w+\s*=',
+        r'<iframe',
+        r'<img[^>]*src\s*=\s*["\']javascript:',
+        r'<svg[^>]*onload',
+        r'expression\s*\(',
+        r'vbscript:',
+        r'data:text/html',
+    ]
+    
+    for pattern in xss_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            threats.append('XSS')
+            break
+    
+    # SQL injection patterns
+    sql_patterns = [
+        r"('|(\\')|(;)|(\\;)|(--)|(\\--)|(/\*)|(\\/\*)|(\*/)|(\\\*/)|(xp_)|(sp_))",
+        r"(\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|EXECUTE|UNION)\b)",
+    ]
+    
+    for pattern in sql_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            threats.append('SQL_INJECTION')
+            break
+    
+    # HTML/script tags
+    if re.search(r'<[^>]+>', text):
+        threats.append('HTML_TAGS')
+    
+    return threats
+
+
+def check_email_security(email):
+    """
+    Check email for security issues.
+    Returns list of security threats found.
+    """
+    threats = []
+    
+    if not email:
+        return threats
+    
+    # Check for XSS/injection
+    xss_threats = check_xss_injection(email)
+    threats.extend(xss_threats)
+    
+    # Check for suspicious patterns
+    suspicious_patterns = [
+        r'[<>]',  # Angle brackets
+        r'javascript:',
+        r'data:',
+    ]
+    
+    for pattern in suspicious_patterns:
+        if re.search(pattern, email, re.IGNORECASE):
+            threats.append('SUSPICIOUS_CHARACTERS')
+            break
+    
+    return threats
+
+
+def validate_password_strength(password):
+    """
+    Validate password strength.
+    Returns dict with is_valid, errors, and strength_score.
+    """
+    errors = []
+    strength_score = 0
+    
+    if not password:
+        return {
+            'is_valid': False,
+            'errors': ['Password is required'],
+            'strength_score': 0
+        }
+    
+    # Length check
+    if len(password) < 8:
+        errors.append('Password must be at least 8 characters long')
+    else:
+        strength_score += 1
+    
+    if len(password) >= 12:
+        strength_score += 1
+    
+    # Character variety checks
+    if re.search(r'[a-z]', password):
+        strength_score += 1
+    else:
+        errors.append('Password should contain at least one lowercase letter')
+    
+    if re.search(r'[A-Z]', password):
+        strength_score += 1
+    else:
+        errors.append('Password should contain at least one uppercase letter')
+    
+    if re.search(r'\d', password):
+        strength_score += 1
+    else:
+        errors.append('Password should contain at least one number')
+    
+    if re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+        strength_score += 1
+    else:
+        errors.append('Password should contain at least one special character')
+    
+    # Common weak passwords
+    weak_passwords = ['password', '12345678', 'qwerty', 'abc123', 'password123']
+    if password.lower() in weak_passwords:
+        errors.append('Password is too common')
+        strength_score = 0
+    
+    # Security checks
+    security_threats = check_xss_injection(password)
+    
+    return {
+        'is_valid': len(errors) == 0 and len(security_threats) == 0,
+        'errors': errors,
+        'security_threats': security_threats,
+        'strength_score': min(strength_score, 5),  # Max score 5
+        'strength_level': 'weak' if strength_score < 3 else 'medium' if strength_score < 4 else 'strong'
+    }
+
+
+def validate_name(name):
+    """
+    Validate name format and security.
+    Returns dict with is_valid, errors, and security_threats.
+    """
+    errors = []
+    
+    if not name:
+        return {
+            'is_valid': False,
+            'errors': ['Name is required'],
+            'security_threats': []
+        }
+    
+    # Length check
+    if len(name) < 2:
+        errors.append('Name must be at least 2 characters long')
+    
+    if len(name) > 100:
+        errors.append('Name must be less than 100 characters')
+    
+    # Character check - allow letters, spaces, hyphens, apostrophes
+    if not re.match(r'^[a-zA-Z\s\-\'\.]+$', name):
+        errors.append('Name can only contain letters, spaces, hyphens, apostrophes, and periods')
+    
+    # Security checks
+    security_threats = check_xss_injection(name)
+    
+    return {
+        'is_valid': len(errors) == 0 and len(security_threats) == 0,
+        'errors': errors,
+        'security_threats': security_threats
+    }
+
+
+class CheckEmailView(APIView):
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        """
+        POST /api/user/check-email/
+        Check if email is valid, available, and secure.
+        Body: {"email": "user@example.com"}
+        """
+        email = request.data.get('email', '').strip()
+        
+        if not email:
+            return Response({
+                'is_valid': False,
+                'errors': ['Email is required'],
+                'user_exists': False,
+                'security_threats': []
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        errors = []
+        security_threats = []
+        
+        # Email format validation
+        email_regex = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_regex, email):
+            errors.append('Invalid email format')
+        
+        # Normalize email (Django's way)
+        try:
+            normalized_email = User.objects.normalize_email(email)
+        except Exception:
+            normalized_email = email.lower().strip()
+        
+        # Check if user exists
+        user_exists = User.objects.filter(email=normalized_email).exists()
+        
+        # Security checks
+        security_threats = check_email_security(email)
+        
+        # Additional validation
+        if len(email) > 254:  # RFC 5321 limit
+            errors.append('Email is too long (max 254 characters)')
+        
+        is_valid = len(errors) == 0 and len(security_threats) == 0
+        
+        return Response({
+            'is_valid': is_valid,
+            'errors': errors,
+            'user_exists': user_exists,
+            'security_threats': security_threats,
+            'normalized_email': normalized_email if is_valid else None
+        }, status=status.HTTP_200_OK)
+
+
+class CheckPasswordView(APIView):
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        """
+        POST /api/user/check-password/
+        Check if password is valid and secure.
+        Body: {"password": "mypassword123"}
+        """
+        password = request.data.get('password', '')
+        
+        if not password:
+            return Response({
+                'is_valid': False,
+                'errors': ['Password is required'],
+                'security_threats': [],
+                'strength_score': 0,
+                'strength_level': 'weak'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        validation_result = validate_password_strength(password)
+        
+        return Response({
+            'is_valid': validation_result['is_valid'],
+            'errors': validation_result['errors'],
+            'security_threats': validation_result.get('security_threats', []),
+            'strength_score': validation_result['strength_score'],
+            'strength_level': validation_result['strength_level']
+        }, status=status.HTTP_200_OK)
+
+
+class CheckNameView(APIView):
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        """
+        POST /api/user/check-name/
+        Check if name is valid and secure.
+        Body: {"name": "John Doe"}
+        """
+        name = request.data.get('name', '').strip()
+        
+        if not name:
+            return Response({
+                'is_valid': False,
+                'errors': ['Name is required'],
+                'security_threats': []
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        validation_result = validate_name(name)
+        
+        return Response({
+            'is_valid': validation_result['is_valid'],
+            'errors': validation_result['errors'],
+            'security_threats': validation_result['security_threats']
+        }, status=status.HTTP_200_OK)

@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import CreateWorkoutView, AddExerciseToWorkoutView, AddExerciseSetToWorkoutExerciseView, GetWorkoutView, GetActiveWorkoutView, DeleteExerciseSetView, DeleteWorkoutExerciseView, UpdateExerciseOrderView, CompleteWorkoutView, DeleteWorkoutView, CheckWorkoutPerformedTodayView, CreateTemplateWorkoutView, GetTemplateWorkoutsView, StartTemplateWorkoutView, UpdateWorkoutView, UpdateExerciseSetView, GetRestTimerStateView, StopRestTimerView, CalendarView, GetAvailableYearsView, CalendarStatsView, GetExercise1RMHistoryView, GetRecoveryRecommendationsView, GetRestPeriodRecommendationsView, GetTrainingFrequencyRecommendationsView, GetRelevantResearchView, GetMuscleRecoveryStatusView, VolumeAnalysisView, WorkoutSummaryView
+from .views import CreateWorkoutView, AddExerciseToWorkoutView, AddExerciseSetToWorkoutExerciseView, GetWorkoutView, GetActiveWorkoutView, DeleteExerciseSetView, DeleteWorkoutExerciseView, UpdateExerciseOrderView, CompleteWorkoutView, DeleteWorkoutView, CheckWorkoutPerformedTodayView, CreateTemplateWorkoutView, GetTemplateWorkoutsView, StartTemplateWorkoutView, UpdateWorkoutView, UpdateExerciseSetView, GetRestTimerStateView, StopRestTimerView, ResumeRestTimerView, CalendarView, GetAvailableYearsView, CalendarStatsView, GetExercise1RMHistoryView, GetRecoveryRecommendationsView, GetRestPeriodRecommendationsView, GetTrainingFrequencyRecommendationsView, GetRelevantResearchView, GetMuscleRecoveryStatusView, VolumeAnalysisView, WorkoutSummaryView
 urlpatterns = [
     path('create/', CreateWorkoutView.as_view(), name='create-workout'),
     path('list/', GetWorkoutView.as_view(), name='list-workouts'),
@@ -8,6 +8,7 @@ urlpatterns = [
     path('active/', GetActiveWorkoutView.as_view(), name='get-active-workout'),
     path('active/rest-timer/', GetRestTimerStateView.as_view(), name='rest-timer-state'),
     path('active/rest-timer/stop/', StopRestTimerView.as_view(), name='stop-rest-timer'),
+    path('active/rest-timer/resume/', ResumeRestTimerView.as_view(), name='resume-rest-timer'),
     path('list/<int:workout_id>/', GetWorkoutView.as_view(), name='get-workout'),
     # Calendar endpoints
     path('calendar/', CalendarView.as_view(), name='calendar-view'),
