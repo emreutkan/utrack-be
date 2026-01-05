@@ -45,7 +45,6 @@ services:
         depends_on: # before web service starts, db service must be healthy
             db: # db service
                 condition: service_healthy # check if db service is healthy
-                required: false  # don't fail if db service isn't running (for local development with sqlite)
 
     nginx:
         image: nginx:alpine
