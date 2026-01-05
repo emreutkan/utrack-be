@@ -408,7 +408,7 @@ class GetWorkoutView(APIView):
                     'workoutexercise_set__exercise',
                     'workoutexercise_set__sets'
                 ).get(id=workout_id, user=request.user)
-                serializer = GetWorkoutSerializer(workout)
+                serializer = GetWorkoutSerializer(workout, context={'include_insights': True})
                 logger.info(f"User {request.user.email} retrieved workout {workout_id}")
                 return Response(serializer.data)
             except Workout.DoesNotExist:
@@ -460,7 +460,7 @@ class GetActiveWorkoutView(APIView):
     def get(self, request):
         active_workout = Workout.objects.filter(user=request.user, is_done=False).first()
         if active_workout:
-            serializer = GetWorkoutSerializer(active_workout)
+            serializer = GetWorkoutSerializer(active_workout, context={'include_insights': True})
             return Response(serializer.data)
         return Response({'error': 'No active workout found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -661,7 +661,7 @@ class CompleteWorkoutView(APIView):
             recovery_progress = get_current_recovery_progress(request.user)
             create_workout_muscle_recovery(request.user, workout, 'post', recovery_progress)
 
-            return Response(GetWorkoutSerializer(workout).data, status=status.HTTP_200_OK)
+            return Response(GetWorkoutSerializer(workout, context={'include_insights': True}).data, status=status.HTTP_200_OK)
         except Workout.DoesNotExist:
             return Response({'error': 'Workout not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -1148,6 +1148,44 @@ class StopRestTimerView(APIView):
             state = get_rest_timer_state(workout)
             return Response({
                 'message': 'Rest timer paused',
+                **state
+            })
+            
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+class ResumeRestTimerView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """
+        GET /api/workout/active/rest-timer/resume
+        Resumes/unpauses the rest timer for the active workout.
+        """
+        try:
+            # Get active workout
+            workout = Workout.objects.filter(
+                user=request.user,
+                is_done=False
+            ).first()
+            
+            if not workout:
+                return Response({
+                    'error': 'No active workout found'
+                }, status=status.HTTP_404_NOT_FOUND)
+            
+            # Resume the rest timer by clearing paused_at
+            if workout.rest_timer_paused_at:
+                workout.rest_timer_paused_at = None
+                workout.save(update_fields=['rest_timer_paused_at'])
+            
+            # Return current state
+            state = get_rest_timer_state(workout)
+            return Response({
+                'message': 'Rest timer resumed',
                 **state
             })
             

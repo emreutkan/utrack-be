@@ -91,6 +91,91 @@ class CompleteWorkoutSerializer(serializers.ModelSerializer):
         
         return super().update(instance, validated_data)
 
+def calculate_set_insights(exercise_set, exercise, workout_exercise=None):
+    """
+    Calculate insights for a set based on exercise type, reps, and TUT.
+    Returns dict with 'good' and 'bad' insights.
+    """
+    insights = {'good': {}, 'bad': {}}
+    
+    # Skip insights for warmup sets
+    if exercise_set.is_warmup:
+        return insights
+    
+    reps = exercise_set.reps if exercise_set.reps else 0
+    total_tut = exercise_set.total_tut if exercise_set.total_tut else None
+    is_compound = exercise.category == 'compound' if exercise else False
+    
+    # Compound exercise insights
+    if is_compound:
+        # Junk volume check: Sets 3+ on compound exercises tax CNS without much benefit
+        if workout_exercise:
+            # Count non-warmup sets for this exercise
+            non_warmup_sets = workout_exercise.sets.filter(is_warmup=False).order_by('set_number')
+            total_non_warmup_sets = non_warmup_sets.count()
+            
+            # Get the position of this set among non-warmup sets (1-indexed)
+            set_position = list(non_warmup_sets.values_list('id', flat=True)).index(exercise_set.id) + 1
+            
+            # If more than 2 sets and this is set 3 or higher
+            if total_non_warmup_sets > 2 and set_position > 2:
+                insights['bad']['junk_volume'] = {
+                    'reason': 'Junk Volume: Sets beyond the first 2 on compound exercises provide diminishing returns while significantly taxing your CNS (Central Nervous System). The first 2 sets provide the majority of the stimulus, and additional sets primarily increase fatigue and recovery time without proportional gains.',
+                    'set_position': set_position,
+                    'total_sets': total_non_warmup_sets,
+                    'optimal_sets': '2 sets for compound exercises'
+                }
+        # Rep range check (6-8 is optimal for compound)
+        if reps < 6 or reps > 8:
+            insights['bad']['rep_range'] = {
+                'reason': 'For Compound Exercises 6–8 reps is the Superior Hypertrophy Range. When you do big lifts for high reps (12+), your cardiovascular system or lower back often fatigues before the target muscle. This range taxes your CNS (Central Nervous System) and joints more than your metabolism. You won\'t feel a "burn" (metabolic stress), you will feel crushed (mechanical fatigue).',
+                'current_reps': reps,
+                'optimal_range': '6-8'
+            }
+        else:
+            insights['good']['rep_range'] = {
+                'reason': 'Optimal rep range for compound exercises (6-8 reps)',
+                'current_reps': reps
+            }
+        
+        # TUT analysis (if available)
+        if total_tut is not None and total_tut > 0:
+            # Check if TUT is in myofibrillar hypertrophy sweet spot (24-35 seconds)
+            if 24 <= total_tut <= 35:
+                insights['good']['tut_sweet_spot'] = {
+                    'reason': 'It is the sweet spot for myofibrillar hypertrophy (increasing the density/size of contractile fibers).',
+                    'current_tut': total_tut,
+                    'optimal_range': '24-35 seconds'
+                }
+            
+            # Check TUT relative to rep count
+            min_tut = reps * 3  # Minimum: 3 seconds per rep
+            max_tut = reps * 4.5  # Maximum: 4.5 seconds per rep
+            
+            if total_tut < min_tut:
+                insights['bad']['tut_too_fast'] = {
+                    'reason': f'Too Fast: If you did {reps} reps in {total_tut} seconds ({total_tut/reps:.1f}s per rep), you are likely using momentum (bouncing the weight) or cutting the eccentric too short. You miss growth signals.',
+                    'current_tut': total_tut,
+                    'optimal_range': f'{min_tut}-{max_tut} seconds',
+                    'seconds_per_rep': round(total_tut / reps, 1) if reps > 0 else 0
+                }
+            elif total_tut > max_tut:
+                insights['bad']['tut_too_slow'] = {
+                    'reason': f'Drifting into Fatigue: If {reps} reps take {total_tut} seconds, you are likely pausing too long at the top/bottom (resting) or moving impressively slow but with sub-maximal loads.',
+                    'current_tut': total_tut,
+                    'optimal_range': f'{min_tut}-{max_tut} seconds',
+                    'seconds_per_rep': round(total_tut / reps, 1) if reps > 0 else 0
+                }
+            else:
+                insights['good']['tut_optimal'] = {
+                    'reason': f'You control the weight down (safety + growth), then fire it up (strength + fiber recruitment). This is the "Powerbuilding" standard.',
+                    'current_tut': total_tut,
+                    'optimal_range': f'{min_tut}-{max_tut} seconds',
+                    'seconds_per_rep': round(total_tut / reps, 1) if reps > 0 else 0
+                }
+    
+    return insights
+
 class ExerciseSetSerializer(serializers.ModelSerializer):
     reps = serializers.IntegerField(min_value=0, max_value=100)
     reps_in_reserve = serializers.IntegerField(min_value=0, max_value=100)
@@ -98,22 +183,47 @@ class ExerciseSetSerializer(serializers.ModelSerializer):
     total_tut = serializers.IntegerField(min_value=0, max_value=600, required=False, allow_null=True)  # Max 10 minutes (600 seconds)
     eccentric_time = serializers.IntegerField(min_value=0, max_value=600, required=False, allow_null=True)  # Max 10 minutes (600 seconds)
     concentric_time = serializers.IntegerField(min_value=0, max_value=600, required=False, allow_null=True)  # Max 10 minutes (600 seconds)
+    insights = serializers.SerializerMethodField()
     
     class Meta:
         model = ExerciseSet
-        fields = ['id', 'workout_exercise', 'set_number', 'reps', 'weight', 'rest_time_before_set', 'is_warmup', 'reps_in_reserve', 'eccentric_time', 'concentric_time', 'total_tut']
+        fields = ['id', 'workout_exercise', 'set_number', 'reps', 'weight', 'rest_time_before_set', 'is_warmup', 'reps_in_reserve', 'eccentric_time', 'concentric_time', 'total_tut', 'insights']
         read_only_fields = ['id']
+    
+    def get_insights(self, obj):
+        """Calculate insights for this set. Only included when include_insights=True in context."""
+        if not self.context.get('include_insights', False):
+            return None  # Don't include insights field in list views
+        
+        # Get the exercise from the workout exercise
+        workout_exercise = obj.workout_exercise
+        exercise = workout_exercise.exercise if workout_exercise else None
+        
+        insights = calculate_set_insights(obj, exercise, workout_exercise)
+        # Always return dict format (even if empty) when insights are enabled
+        return insights if insights else {'good': {}, 'bad': {}}
 
 class WorkoutExerciseSerializer(serializers.ModelSerializer):
     # Accept exercise as ID when writing, return full object when reading
     exercise = serializers.PrimaryKeyRelatedField(queryset=Exercise.objects.all())
     # Add this line to fetch related sets
-    sets = ExerciseSetSerializer(many=True, read_only=True) 
+    sets = serializers.SerializerMethodField() 
     
     class Meta:
         model = WorkoutExercise
         fields = ['id', 'workout', 'exercise', 'order', 'sets', 'one_rep_max']
         read_only_fields = ['id', 'one_rep_max']
+    
+    def get_sets(self, obj):
+        """Get sets with context for insights if needed"""
+        include_insights = self.context.get('include_insights', False)
+        sets = obj.sets.all()
+        serializer = ExerciseSetSerializer(
+            sets, 
+            many=True, 
+            context={'include_insights': include_insights}
+        )
+        return serializer.data
     
     def to_representation(self, instance):
         # Override to return full exercise object instead of just ID
@@ -156,7 +266,7 @@ class GetWorkoutSerializer(serializers.ModelSerializer):
     # Add this field to fetch related exercises
     # Note: 'workoutexercise_set' is the default related name. 
     # If you want it to be called 'exercises', you can rename it in the SerializerField
-    exercises = WorkoutExerciseSerializer(source='workoutexercise_set', many=True, read_only=True)
+    exercises = serializers.SerializerMethodField()
     total_volume = serializers.SerializerMethodField()
     primary_muscles_worked = serializers.SerializerMethodField()
     secondary_muscles_worked = serializers.SerializerMethodField()
@@ -166,6 +276,17 @@ class GetWorkoutSerializer(serializers.ModelSerializer):
         model = Workout
         fields = ['id', 'title', 'datetime', 'duration', 'intensity', 'notes', 'is_done', 'is_rest_day', 'calories_burned', 'created_at', 'updated_at', 'exercises', 'total_volume', 'primary_muscles_worked', 'secondary_muscles_worked', 'muscle_recovery_pre_workout']
         read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def get_exercises(self, obj):
+        """Get exercises with context for insights if needed"""
+        include_insights = self.context.get('include_insights', False)
+        exercises = obj.workoutexercise_set.all()
+        serializer = WorkoutExerciseSerializer(
+            exercises, 
+            many=True, 
+            context={'include_insights': include_insights}
+        )
+        return serializer.data
     
     def get_total_volume(self, obj):
         """Calculate total volume (sum of weight * reps for all sets)"""
