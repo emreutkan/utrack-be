@@ -17,6 +17,16 @@ from datetime import date
 from body_measurements.models import BodyMeasurement
 import re
 import html
+import csv
+import io
+import zipfile
+import json
+from django.http import HttpResponse
+from django.db import transaction
+from workout.models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise
+from supplements.models import UserSupplement, UserSupplementLog, Supplement
+from exercise.models import Exercise
+from .models import Preferences
 
 User = get_user_model()
 
@@ -673,3 +683,311 @@ class CheckNameView(APIView):
             'errors': validation_result['errors'],
             'security_threats': validation_result['security_threats']
         }, status=status.HTTP_200_OK)
+
+
+class DataExportView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        export_format = request.query_params.get('format', 'json').lower()
+        user = request.user
+
+        # Gather all user data
+        data = {
+            'profile': {
+                'gender': user.gender,
+                'height': float(user.userprofile.height) if user.userprofile.height else None,
+                'weight': float(user.userprofile.body_weight) if user.userprofile.body_weight else None,
+            },
+            'preferences': {
+                'auto_warmup_set': user.preferences.auto_warmup_set,
+                'rest_time': user.preferences.rest_time,
+                'units': user.preferences.units,
+            },
+            'weight_history': list(WeightHistory.objects.filter(user=user).values('weight', 'created_at')),
+            'body_measurements': list(BodyMeasurement.objects.filter(user=user).values(
+                'weight', 'body_fat_percentage', 'neck', 'waist', 'hip', 'created_at'
+            )),
+            'workouts': [],
+            'template_workouts': [],
+            'supplements': [],
+            'supplement_logs': []
+        }
+
+        # Convert datetimes to strings for JSON
+        for entry in data['weight_history']:
+            entry['created_at'] = entry['created_at'].isoformat()
+            entry['weight'] = float(entry['weight'])
+
+        for entry in data['body_measurements']:
+            entry['created_at'] = entry['created_at'].isoformat()
+            for key in ['weight', 'body_fat_percentage', 'neck', 'waist', 'hip']:
+                if entry[key]:
+                    entry[key] = float(entry[key])
+
+        # Get Workouts
+        workouts = Workout.objects.filter(user=user).prefetch_related('workoutexercise_set__exercise', 'workoutexercise_set__sets')
+        for w in workouts:
+            w_data = {
+                'title': w.title,
+                'datetime': w.datetime.isoformat(),
+                'duration': w.duration,
+                'intensity': w.intensity,
+                'notes': w.notes,
+                'is_done': w.is_done,
+                'is_rest_day': w.is_rest_day,
+                'calories_burned': float(w.calories_burned) if w.calories_burned else None,
+                'exercises': []
+            }
+            for we in w.workoutexercise_set.all():
+                we_data = {
+                    'exercise_name': we.exercise.name,
+                    'order': we.order,
+                    'sets': list(we.sets.values('set_number', 'reps', 'weight', 'rest_time_before_set', 'is_warmup', 'reps_in_reserve', 'eccentric_time', 'concentric_time', 'total_tut'))
+                }
+                for s in we_data['sets']:
+                    s['weight'] = float(s['weight'])
+                w_data['exercises'].append(we_data)
+            data['workouts'].append(w_data)
+
+        # Get Template Workouts
+        templates = TemplateWorkout.objects.filter(user=user).prefetch_related('templateworkoutexercise_set__exercise')
+        for t in templates:
+            t_data = {
+                'title': t.title,
+                'notes': t.notes,
+                'exercises': [
+                    {'exercise_name': twe.exercise.name, 'order': twe.order}
+                    for twe in t.templateworkoutexercise_set.all()
+                ]
+            }
+            data['template_workouts'].append(t_data)
+
+        # Get Supplements
+        user_supps = UserSupplement.objects.filter(user=user).select_related('supplement')
+        for us in user_supps:
+            us_data = {
+                'supplement_name': us.supplement.name,
+                'dosage': us.dosage,
+                'frequency': us.frequency,
+                'time_of_day': us.time_of_day,
+                'is_active': us.is_active
+            }
+            data['supplements'].append(us_data)
+
+        # Get Supplement Logs
+        logs = UserSupplementLog.objects.filter(user=user).select_related('user_supplement__supplement')
+        for log in logs:
+            log_data = {
+                'supplement_name': log.user_supplement.supplement.name,
+                'date': log.date.isoformat(),
+                'time': log.time.isoformat(),
+                'dosage': log.dosage
+            }
+            data['supplement_logs'].append(log_data)
+
+        if export_format == 'csv':
+            # Create ZIP archive with multiple CSVs
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w') as zip_file:
+                # Weight History CSV
+                weight_io = io.StringIO()
+                weight_writer = csv.writer(weight_io)
+                weight_writer.writerow(['Date', 'Weight (kg)'])
+                for entry in data['weight_history']:
+                    weight_writer.writerow([entry['created_at'], entry['weight']])
+                zip_file.writestr('weight_history.csv', weight_io.getvalue())
+
+                # Workouts CSV (flat format)
+                workout_io = io.StringIO()
+                workout_writer = csv.writer(workout_io)
+                workout_writer.writerow(['Date', 'Workout Title', 'Exercise', 'Set #', 'Weight', 'Reps', 'Is Warmup', 'RIR'])
+                for w in data['workouts']:
+                    for we in w['exercises']:
+                        for s in we['sets']:
+                            workout_writer.writerow([
+                                w['datetime'], w['title'], we['exercise_name'],
+                                s['set_number'], s['weight'], s['reps'],
+                                s['is_warmup'], s['reps_in_reserve']
+                            ])
+                zip_file.writestr('workouts.csv', workout_io.getvalue())
+
+                # Body Measurements CSV
+                bm_io = io.StringIO()
+                bm_writer = csv.writer(bm_io)
+                bm_writer.writerow(['Date', 'Weight', 'Body Fat %', 'Neck', 'Waist', 'Hip'])
+                for bm in data['body_measurements']:
+                    bm_writer.writerow([
+                        bm['created_at'], bm['weight'], bm['body_fat_percentage'],
+                        bm['neck'], bm['waist'], bm['hip']
+                    ])
+                zip_file.writestr('body_measurements.csv', bm_io.getvalue())
+
+                # Supplements CSV
+                supp_io = io.StringIO()
+                supp_writer = csv.writer(supp_io)
+                supp_writer.writerow(['Date', 'Time', 'Supplement', 'Dosage'])
+                for log in data['supplement_logs']:
+                    supp_writer.writerow([log['date'], log['time'], log['supplement_name'], log['dosage']])
+                zip_file.writestr('supplement_logs.csv', supp_io.getvalue())
+
+            buffer.seek(0)
+            response = HttpResponse(buffer, content_type='application/zip')
+            response['Content-Disposition'] = f'attachment; filename="utrack_data_export_{user.email}_{date.today()}.zip"'
+            return response
+
+        else:
+            # Default to JSON
+            response_json = json.dumps(data, indent=4)
+            response = HttpResponse(response_json, content_type='application/json')
+            response['Content-Disposition'] = f'attachment; filename="utrack_data_export_{user.email}_{date.today()}.json"'
+            return response
+
+class DataImportView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if 'file' not in request.FILES:
+            return Response({'error': 'No file uploaded'}, status=status.HTTP_400_BAD_REQUEST)
+
+        import_file = request.FILES['file']
+        try:
+            data = json.load(import_file)
+        except json.JSONDecodeError:
+            return Response({'error': 'Invalid JSON file'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = request.user
+        
+        with transaction.atomic():
+            # 1. Profile and Preferences
+            if 'profile' in data:
+                p = data['profile']
+                if 'gender' in p: user.gender = p['gender']
+                user.save()
+                
+                profile, _ = UserProfile.objects.get_or_create(user=user)
+                if 'height' in p: profile.height = p['height']
+                if 'weight' in p: profile.body_weight = p['weight']
+                profile.save()
+
+            if 'preferences' in data:
+                pref = data['preferences']
+                p_obj, _ = Preferences.objects.get_or_create(user=user)
+                if 'auto_warmup_set' in pref: p_obj.auto_warmup_set = pref['auto_warmup_set']
+                if 'rest_time' in pref: p_obj.rest_time = pref['rest_time']
+                if 'units' in pref: p_obj.units = pref['units']
+                p_obj.save()
+
+            # 2. Weight History
+            if 'weight_history' in data:
+                for entry in data['weight_history']:
+                    WeightHistory.objects.get_or_create(
+                        user=user,
+                        weight=entry['weight'],
+                        created_at=entry['created_at']
+                    )
+
+            # 3. Body Measurements
+            if 'body_measurements' in data:
+                for bm in data['body_measurements']:
+                    BodyMeasurement.objects.get_or_create(
+                        user=user,
+                        created_at=bm['created_at'],
+                        defaults={
+                            'weight': bm.get('weight'),
+                            'body_fat_percentage': bm.get('body_fat_percentage'),
+                            'neck': bm.get('neck'),
+                            'waist': bm.get('waist'),
+                            'hip': bm.get('hip')
+                        }
+                    )
+
+            # 4. Workouts
+            if 'workouts' in data:
+                for w in data['workouts']:
+                    workout, created = Workout.objects.get_or_create(
+                        user=user,
+                        datetime=w['datetime'],
+                        defaults={
+                            'title': w['title'],
+                            'duration': w['duration'],
+                            'intensity': w['intensity'],
+                            'notes': w.get('notes'),
+                            'is_done': w.get('is_done', True),
+                            'is_rest_day': w.get('is_rest_day', False),
+                            'calories_burned': w.get('calories_burned')
+                        }
+                    )
+                    if created:
+                        for ex in w.get('exercises', []):
+                            exercise = Exercise.objects.filter(name__iexact=ex['exercise_name']).first()
+                            if exercise:
+                                we = WorkoutExercise.objects.create(
+                                    workout=workout,
+                                    exercise=exercise,
+                                    order=ex['order']
+                                )
+                                for s in ex.get('sets', []):
+                                    ExerciseSet.objects.create(
+                                        workout_exercise=we,
+                                        set_number=s['set_number'],
+                                        reps=s['reps'],
+                                        weight=s['weight'],
+                                        rest_time_before_set=s.get('rest_time_before_set', 0),
+                                        is_warmup=s.get('is_warmup', False),
+                                        reps_in_reserve=s.get('reps_in_reserve', 0),
+                                        eccentric_time=s.get('eccentric_time'),
+                                        concentric_time=s.get('concentric_time'),
+                                        total_tut=s.get('total_tut')
+                                    )
+
+            # 5. Template Workouts
+            if 'template_workouts' in data:
+                for t in data['template_workouts']:
+                    template, created = TemplateWorkout.objects.get_or_create(
+                        user=user,
+                        title=t['title'],
+                        defaults={'notes': t.get('notes')}
+                    )
+                    if created:
+                        for ex in t.get('exercises', []):
+                            exercise = Exercise.objects.filter(name__iexact=ex['exercise_name']).first()
+                            if exercise:
+                                TemplateWorkoutExercise.objects.create(
+                                    template_workout=template,
+                                    exercise=exercise,
+                                    order=ex['order']
+                                )
+
+            # 6. Supplements
+            if 'supplements' in data:
+                for s in data['supplements']:
+                    supplement = Supplement.objects.filter(name__iexact=s['supplement_name']).first()
+                    if supplement:
+                        UserSupplement.objects.get_or_create(
+                            user=user,
+                            supplement=supplement,
+                            defaults={
+                                'dosage': s['dosage'],
+                                'frequency': s['frequency'],
+                                'time_of_day': s.get('time_of_day'),
+                                'is_active': s.get('is_active', True)
+                            }
+                        )
+
+            # 7. Supplement Logs
+            if 'supplement_logs' in data:
+                for log in data['supplement_logs']:
+                    supplement = Supplement.objects.filter(name__iexact=log['supplement_name']).first()
+                    if supplement:
+                        user_supp = UserSupplement.objects.filter(user=user, supplement=supplement).first()
+                        if user_supp:
+                            UserSupplementLog.objects.get_or_create(
+                                user=user,
+                                user_supplement=user_supp,
+                                date=log['date'],
+                                time=log['time'],
+                                defaults={'dosage': log['dosage']}
+                            )
+
+        return Response({'message': 'Data imported successfully'}, status=status.HTTP_201_CREATED)

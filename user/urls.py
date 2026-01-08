@@ -3,7 +3,8 @@ from .views import (
     RegisterView, UserProfileView, UpdateHeightView, UpdateGenderView, 
     ChangePasswordView, RequestPasswordResetView, ResetPasswordView,
     UpdateWeightView, GetWeightHistoryView, DeleteWeightView,
-    CheckEmailView, CheckPasswordView, CheckNameView
+    CheckEmailView, CheckPasswordView, CheckNameView,
+    DataExportView, DataImportView
 )
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
@@ -26,4 +27,6 @@ urlpatterns = [
     path('check-name/', CheckNameView.as_view(), name='check_name'),
     path('login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('data/export/', DataExportView.as_view(), name='data_export'),
+    path('data/import/', DataImportView.as_view(), name='data_import'),
 ]

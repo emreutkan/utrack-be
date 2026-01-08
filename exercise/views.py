@@ -10,6 +10,7 @@ from rest_framework import status
 from workout.models import Workout, WorkoutExercise
 from django.core.cache import cache
 from rest_framework.pagination import PageNumberPagination
+from django.db.models import Q
 
 class ExercisePagination(PageNumberPagination):
     page_size = 50
@@ -29,10 +30,24 @@ class ExerciseListView(APIView):
         # Cache globally (same for all users) - exercises don't change per user
         exercises_data = cache.get(cache_key)
         if exercises_data is None:
+            exercises = Exercise.objects.filter(is_active=True)
             if query:
-                exercises = Exercise.objects.filter(name__icontains=query, is_active=True)
-            else:
-                exercises = Exercise.objects.filter(is_active=True)
+                keywords = query.lower().split()
+                for word in keywords:
+                    # Search for word in name, primary_muscle or equipment_type
+                    # Also handle simple plurals by stripping 's' from query word
+                    q_obj = Q(name__icontains=word) | \
+                            Q(primary_muscle__icontains=word) | \
+                            Q(equipment_type__icontains=word)
+                    
+                    if word.endswith('s') and len(word) > 3:
+                        singular = word[:-1]
+                        q_obj |= Q(name__icontains=singular) | \
+                                 Q(primary_muscle__icontains=singular) | \
+                                 Q(equipment_type__icontains=singular)
+                    
+                    exercises = exercises.filter(q_obj)
+            
             serializer = ExerciseSerializer(exercises, many=True)
             exercises_data = serializer.data
             cache.set(cache_key, exercises_data, 60*60)  # 1 hour cache

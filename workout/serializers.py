@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise, TrainingResearch, MuscleRecovery, WorkoutMuscleRecovery
+from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise, TrainingResearch, MuscleRecovery, WorkoutMuscleRecovery, CNSRecovery
 from django.utils import timezone
 from datetime import datetime
 from exercise.serializers import ExerciseSerializer
@@ -190,6 +190,21 @@ class ExerciseSetSerializer(serializers.ModelSerializer):
         fields = ['id', 'workout_exercise', 'set_number', 'reps', 'weight', 'rest_time_before_set', 'is_warmup', 'reps_in_reserve', 'eccentric_time', 'concentric_time', 'total_tut', 'insights']
         read_only_fields = ['id']
     
+    def to_representation(self, instance):
+        """Format weight - return integer if .00, otherwise return decimal"""
+        representation = super().to_representation(instance)
+        
+        # Format weight field
+        if 'weight' in representation and representation['weight'] is not None:
+            weight_float = float(representation['weight'])
+            # If it's a whole number, return as int
+            if weight_float == int(weight_float):
+                representation['weight'] = int(weight_float)
+            else:
+                representation['weight'] = weight_float
+        
+        return representation
+    
     def get_insights(self, obj):
         """Calculate insights for this set. Only included when include_insights=True in context."""
         if not self.context.get('include_insights', False):
@@ -271,10 +286,11 @@ class GetWorkoutSerializer(serializers.ModelSerializer):
     primary_muscles_worked = serializers.SerializerMethodField()
     secondary_muscles_worked = serializers.SerializerMethodField()
     muscle_recovery_pre_workout = serializers.SerializerMethodField()
+    cns_load = serializers.SerializerMethodField()
 
     class Meta:
         model = Workout
-        fields = ['id', 'title', 'datetime', 'duration', 'intensity', 'notes', 'is_done', 'is_rest_day', 'calories_burned', 'created_at', 'updated_at', 'exercises', 'total_volume', 'primary_muscles_worked', 'secondary_muscles_worked', 'muscle_recovery_pre_workout']
+        fields = ['id', 'title', 'datetime', 'duration', 'intensity', 'notes', 'is_done', 'is_rest_day', 'calories_burned', 'created_at', 'updated_at', 'exercises', 'total_volume', 'primary_muscles_worked', 'secondary_muscles_worked', 'muscle_recovery_pre_workout', 'cns_load']
         read_only_fields = ['id', 'created_at', 'updated_at']
     
     def get_exercises(self, obj):
@@ -332,6 +348,12 @@ class GetWorkoutSerializer(serializers.ModelSerializer):
                 recovery_dict[record.muscle_group] = float(record.recovery_progress)
             return recovery_dict
         return {}
+    
+    def get_cns_load(self, obj):
+        """Calculate and return CNS (Central Nervous System) load for this workout"""
+        if obj.is_rest_day:
+            return 0.0
+        return obj.calculate_cns_load()
 
 class TemplateWorkoutExerciseSerializer(serializers.ModelSerializer):
     exercise = ExerciseSerializer(read_only=True)
@@ -448,6 +470,63 @@ class MuscleRecoverySerializer(serializers.ModelSerializer):
         """
         Calculate recovery percentage using non-linear J-curve model.
         Recovery is NOT linear - follows inflammation → protein synthesis → structural repair phases.
+        """
+        if not obj.recovery_until or obj.is_recovered:
+            return 100
+        
+        # Calculate percentage based on time elapsed
+        workout_time = obj.source_workout.datetime if obj.source_workout else obj.created_at
+        total_duration = obj.recovery_until - workout_time
+        elapsed = timezone.now() - workout_time
+        
+        if total_duration.total_seconds() <= 0:
+            return 100
+        
+        # Non-linear recovery curve (J-curve model)
+        # 0-24h: Inflammation phase - slower recovery (0-30%)
+        # 24-48h: Protein synthesis phase - accelerated recovery (30-70%)
+        # 48h+: Structural repair - final recovery (70-100%)
+        linear_progress = elapsed.total_seconds() / total_duration.total_seconds()
+        
+        # Apply J-curve transformation
+        if linear_progress <= 0.3:
+            # Early phase - inflammation, slower recovery
+            non_linear_progress = linear_progress * 0.7
+        elif linear_progress <= 0.7:
+            # Mid phase - protein synthesis, accelerated recovery
+            non_linear_progress = 0.21 + (linear_progress - 0.3) * 1.225
+        else:
+            # Final phase - structural repair completion
+            non_linear_progress = 0.7 + (linear_progress - 0.7) * 1.0
+        
+        percentage = non_linear_progress * 100
+        return min(100, max(0, round(percentage, 1)))
+
+class CNSRecoverySerializer(serializers.ModelSerializer):
+    hours_until_recovery = serializers.SerializerMethodField()
+    recovery_percentage = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = CNSRecovery
+        fields = [
+            'id', 'cns_load', 'recovery_hours', 'recovery_until', 
+            'is_recovered', 'source_workout', 'hours_until_recovery', 
+            'recovery_percentage', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def get_hours_until_recovery(self, obj):
+        """Calculate hours until recovery"""
+        if obj.recovery_until:
+            delta = obj.recovery_until - timezone.now()
+            if delta.total_seconds() > 0:
+                return round(delta.total_seconds() / 3600, 1)
+        return 0
+    
+    def get_recovery_percentage(self, obj):
+        """
+        Calculate CNS recovery percentage using non-linear J-curve model.
+        Same model as muscle recovery - follows inflammation → protein synthesis → structural repair phases.
         """
         if not obj.recovery_until or obj.is_recovered:
             return 100

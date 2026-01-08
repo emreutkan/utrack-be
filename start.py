@@ -57,7 +57,7 @@ def run_server():
     # Build command
     if is_windows():
   
-        cmd = [str(venv_python), 'manage.py', 'runserver', '192.168.1.2:8000']
+        cmd = [str(venv_python), 'manage.py', 'runserver', '192.168.1.4:8000']
     else:
         cmd = [str(venv_python), 'manage.py', 'runserver']
     

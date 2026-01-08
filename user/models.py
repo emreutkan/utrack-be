@@ -42,6 +42,11 @@ class CustomUser(AbstractUser, TimestampedModel):
     email = models.EmailField(unique=True) ## abstract user already has an email field, but we need to make it unique so we override it
     is_verified = models.BooleanField(default=False)
     gender = models.CharField(max_length=10, choices=[('male', 'Male'), ('female', 'Female')], default='male', help_text="Gender for body fat calculations and recommendations")
+    
+    # PRO subscription fields
+    is_pro = models.BooleanField(default=False, help_text="Whether user has active PRO subscription")
+    pro_until = models.DateTimeField(null=True, blank=True, help_text="PRO subscription expiration date")
+    subscription_id = models.CharField(max_length=255, blank=True, help_text="Payment provider subscription ID (Stripe, RevenueCat, etc.)")
 
     USERNAME_FIELD = 'email'  ## this tells Django that the email field is used for authentication instead of the username field
     REQUIRED_FIELDS = []

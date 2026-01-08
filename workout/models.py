@@ -150,6 +150,8 @@ class Workout(TimestampedModel):
         - Small muscles (biceps, calves): 36h base (faster protein synthesis)
         - Large muscles (quads, back, chest): 48h base (more structural damage)
         - Medium muscles (shoulders): 42h base
+        - Volume scalar: If fatigue_score < 6.0, scale base hours proportionally (min 0.5x)
+          This accounts for micro-dosing volume (e.g., 2 sets should not require full 36h base)
         - Fatigue multiplier: High fatigue (>20) = 1.5x, Moderate (>12) = 1.3x, Low (>6) = 1.1x
         - Volume penalty: >8 sets = +12h, >15 sets = +24h
         - Metabolic fatigue: Short rest on compound = +6h
@@ -297,6 +299,16 @@ class Workout(TimestampedModel):
             else:
                 base_recovery = 42  # Medium muscles (shoulders, etc.)
             
+            # --- VOLUME SCALAR: Scale base recovery based on actual fatigue score ---
+            # A standard "full" session usually generates a fatigue score of 8-12.
+            # If score is lower (micro-dosing), reduce base time proportionally.
+            # Keep a minimum floor (0.5x) to account for basic inflammation.
+            if fatigue_score < 6.0:
+                # Scale down linearly: fatigue_score / 8.0 benchmark
+                # Example: 2.4 score / 8.0 = 0.3, but floor at 0.5
+                scaling_factor = max(0.5, fatigue_score / 8.0)
+                base_recovery = base_recovery * scaling_factor
+            
             # Fatigue-based adjustment (more fatigue = longer recovery)
             # High fatigue (failure sets, high volume) extends recovery significantly
             fatigue_multiplier = 1.0
@@ -353,6 +365,142 @@ class Workout(TimestampedModel):
             recovery_records.append(recovery_record)
         
         return recovery_records
+
+    def calculate_cns_load(self):
+        """
+        Calculate Central Nervous System (CNS) load for this workout.
+        CNS fatigue is driven by Axial Loading (weight on spine) and Absolute Intensity (% of 1RM),
+        not just metabolic fatigue. This is calculated per session, not per muscle.
+        
+        Formula:
+        - Each exercise has a CNS coefficient based on type and axial loading
+        - RPE is calculated from RIR: RPE = 10 - RIR
+        - RPE impact is non-linear (exponential): RPE^2 / 10.0
+        - CNS Load = sum of (RPE_factor * CNS_coefficient) for all sets
+        
+        Interpretation:
+        - < 150: Low CNS impact (Recovery: ~24h)
+        - 150-300: Moderate CNS impact (Recovery: ~48h)
+        - > 300: High CNS impact (Recovery: ~72h+)
+        """
+        # CNS Coefficient mapping based on exercise type and axial loading
+        # Tier S (1.5-2.0): High axial load, heavy systemic stress
+        # Tier A (1.2-1.4): Moderate axial load, compound movements
+        # Tier B (1.0): Standard compound movements
+        # Tier C (0.5): Isolation movements
+        
+        # Map exercise names to CNS coefficients (case-insensitive)
+        cns_coefficients_map = {
+            # Tier S - Highest CNS cost
+            'deadlift': 2.0,
+            'squat': 1.8,
+            'rack pull': 1.8,
+            'trap bar deadlift': 1.7,
+            'sumo deadlift': 1.7,
+            
+            # Tier A - High CNS cost
+            'bench press': 1.3,
+            'overhead press': 1.4,
+            'barbell row': 1.3,
+            'pendlay row': 1.3,
+            'leg press': 1.2,
+            'front squat': 1.5,
+            'overhead squat': 1.6,
+            
+            # Tier B - Standard compounds (default 1.0)
+            # These will use category-based default
+            
+            # Tier C - Isolation (low CNS cost)
+            # These will use category-based default
+        }
+        
+        cns_load = 0.0
+        workout_exercises = WorkoutExercise.objects.filter(workout=self).select_related('exercise').prefetch_related('sets')
+        
+        for workout_exercise in workout_exercises:
+            exercise = workout_exercise.exercise
+            sets = workout_exercise.sets.all()
+            
+            # Skip if no sets
+            if not sets.exists():
+                continue
+            
+            # Get CNS coefficient for this exercise
+            exercise_name_lower = exercise.name.lower()
+            cns_coefficient = cns_coefficients_map.get(exercise_name_lower, None)
+            
+            # If not in map, use category-based default
+            if cns_coefficient is None:
+                if exercise.category == 'compound':
+                    # Check if it's a heavy compound (barbell-based)
+                    if exercise.equipment_type in ['barbell', 'ez_bar']:
+                        cns_coefficient = 1.2  # Tier A
+                    else:
+                        cns_coefficient = 1.0  # Tier B
+                elif exercise.category == 'isolation':
+                    cns_coefficient = 0.5  # Tier C
+                else:
+                    cns_coefficient = 0.3  # Cardio/stability - minimal CNS cost
+            
+            # Calculate CNS load from all sets
+            for exercise_set in sets:
+                # Skip warmup sets
+                if exercise_set.is_warmup:
+                    continue
+                
+                # Calculate RPE from RIR: RPE = 10 - RIR
+                rir = exercise_set.reps_in_reserve if exercise_set.reps_in_reserve is not None else 0
+                rpe = max(1.0, min(10.0, 10.0 - rir))  # Clamp between 1-10
+                
+                # RPE impact is non-linear (exponential curve)
+                # RPE 10 -> 100 points, RPE 9 -> 81 points, RPE 8 -> 64 points
+                rpe_factor = (rpe ** 2) / 10.0
+                
+                # Add to total CNS load
+                cns_load += (rpe_factor * cns_coefficient)
+        
+        return round(cns_load, 2)
+
+    def calculate_cns_recovery(self):
+        """
+        Calculate CNS recovery time based on CNS load.
+        Creates or updates a CNSRecovery record for this workout.
+        
+        Recovery Hours Formula:
+        - < 150: Low CNS impact (Recovery: ~24h)
+        - 150-300: Moderate CNS impact (Recovery: ~48h)
+        - > 300: High CNS impact (Recovery: ~72h+)
+        - Very high (>500): Extreme CNS impact (Recovery: ~96h)
+        """
+        cns_load = self.calculate_cns_load()
+        
+        # Calculate recovery hours based on CNS load
+        if cns_load < 150:
+            recovery_hours = 24
+        elif cns_load < 300:
+            recovery_hours = 48
+        elif cns_load < 500:
+            recovery_hours = 72
+        else:
+            recovery_hours = 96  # Cap at 96 hours for extreme cases
+        
+        # Calculate recovery_until timestamp
+        workout_datetime = self.datetime or self.created_at
+        recovery_until = workout_datetime + timezone.timedelta(hours=recovery_hours)
+        
+        # Create or update CNSRecovery record
+        cns_recovery, created = CNSRecovery.objects.update_or_create(
+            user=self.user,
+            source_workout=self,
+            defaults={
+                'cns_load': cns_load,
+                'recovery_hours': recovery_hours,
+                'recovery_until': recovery_until,
+                'is_recovered': timezone.now() >= recovery_until
+            }
+        )
+        
+        return cns_recovery
 
 
 class WorkoutExercise(TimestampedModel):
@@ -501,3 +649,37 @@ class WorkoutMuscleRecovery(TimestampedModel):
     
     def __str__(self):
         return f"{self.user.email} - {self.workout.id} - {self.muscle_group} - {self.condition} - {self.recovery_progress}%"
+
+class CNSRecovery(TimestampedModel):
+    """
+    Tracks Central Nervous System (CNS) recovery status per user.
+    CNS fatigue is different from muscle fatigue - it's systemic and affects overall performance.
+    """
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
+    
+    # CNS load tracking
+    cns_load = models.DecimalField(max_digits=8, decimal_places=2, default=0.0)
+    
+    # Recovery timing
+    recovery_hours = models.PositiveIntegerField(default=24)  # Hours until fully recovered
+    recovery_until = models.DateTimeField(null=True, blank=True)  # Timestamp when recovery is complete
+    
+    # Source workout
+    source_workout = models.ForeignKey(Workout, on_delete=models.CASCADE, null=True, blank=True)
+    
+    # Status
+    is_recovered = models.BooleanField(default=False)
+    
+    class Meta:
+        ordering = ['-recovery_until']
+        unique_together = [['user', 'source_workout']]  # One CNS recovery record per workout
+    
+    def __str__(self):
+        return f"{self.user.email} - CNS Load: {self.cns_load} - {self.recovery_hours}h"
+    
+    def update_recovery_status(self):
+        """Update is_recovered based on recovery_until timestamp"""
+        if self.recovery_until:
+            self.is_recovered = timezone.now() >= self.recovery_until
+            self.save(update_fields=['is_recovered'])
+        return self.is_recovered

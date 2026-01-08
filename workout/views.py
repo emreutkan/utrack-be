@@ -10,8 +10,9 @@ from django.db import models
 from calendar import monthrange
 from collections import defaultdict
 import logging
-from .serializers import CreateWorkoutSerializer, WorkoutExerciseSerializer, ExerciseSetSerializer, GetWorkoutSerializer, UpdateWorkoutSerializer, CreateTemplateWorkoutSerializer, GetTemplateWorkoutSerializer, TrainingResearchSerializer, MuscleRecoverySerializer # Import GetWorkoutSerializer
-from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise, TrainingResearch, MuscleRecovery, WorkoutMuscleRecovery
+from .serializers import CreateWorkoutSerializer, WorkoutExerciseSerializer, ExerciseSetSerializer, GetWorkoutSerializer, UpdateWorkoutSerializer, CreateTemplateWorkoutSerializer, GetTemplateWorkoutSerializer, TrainingResearchSerializer, MuscleRecoverySerializer, CNSRecoverySerializer # Import GetWorkoutSerializer
+from .models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise, TrainingResearch, MuscleRecovery, WorkoutMuscleRecovery, CNSRecovery
+from .permissions import is_pro_user, get_pro_response
 from exercise.models import Exercise
 from django.core.cache import cache
 from django.views.decorators.vary import vary_on_headers
@@ -199,6 +200,9 @@ def recalculate_workout_metrics(workout):
             
             # Recalculate muscle recovery
             workout.calculate_muscle_recovery()
+            
+            # Recalculate CNS recovery
+            workout.calculate_cns_recovery()
 
 def calculate_workout_exercise_1rm(workout_exercise):
     """
@@ -1038,6 +1042,17 @@ class GetTemplateWorkoutsView(APIView):
         serializer = GetTemplateWorkoutSerializer(template_workouts, many=True)
         return Response(serializer.data)
 
+class DeleteTemplateWorkoutView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, template_id):
+        try:
+            template = TemplateWorkout.objects.get(id=template_id, user=request.user)
+            template.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except TemplateWorkout.DoesNotExist:
+            return Response({'error': 'Template not found'}, status=status.HTTP_404_NOT_FOUND)
+
 class StartTemplateWorkoutView(APIView):
     permission_classes = [IsAuthenticated]
     
@@ -1240,7 +1255,12 @@ class GetRecoveryRecommendationsView(APIView):
         """
         GET /api/workout/recommendations/recovery/
         Returns recovery recommendations based on user's last workout.
+        PRO only feature.
         """
+        # PRO check
+        if not is_pro_user(request.user):
+            return get_pro_response()
+        
         # Get last completed workout
         last_workout = Workout.objects.filter(
             user=request.user,
@@ -1318,7 +1338,11 @@ class GetRestPeriodRecommendationsView(APIView):
         """
         GET /api/workout/exercise/<workout_exercise_id>/rest-recommendations/
         Returns recommended rest periods for an exercise based on research.
+        PRO only feature.
         """
+        # PRO check
+        if not is_pro_user(request.user):
+            return get_pro_response()
         try:
             workout_exercise = WorkoutExercise.objects.get(
                 id=workout_exercise_id,
@@ -1373,7 +1397,11 @@ class GetTrainingFrequencyRecommendationsView(APIView):
         """
         GET /api/workout/recommendations/frequency/
         Returns training frequency recommendations based on research.
+        PRO only feature.
         """
+        # PRO check
+        if not is_pro_user(request.user):
+            return get_pro_response()
         # Get research on training frequency
         research = TrainingResearch.objects.filter(
             is_active=True,
@@ -1501,8 +1529,38 @@ class GetMuscleRecoveryStatusView(APIView):
                     'updated_at': None
                 }
         
+        # Get current CNS recovery status (PRO only)
+        cns_recovery = None
+        if is_pro_user(request.user):
+            cns_recovery_record = CNSRecovery.objects.filter(
+                user=request.user
+            ).select_related('source_workout').order_by('-recovery_until').first()
+            
+            if cns_recovery_record:
+                cns_recovery_record.update_recovery_status()
+                cns_recovery = CNSRecoverySerializer(cns_recovery_record).data
+            else:
+                # No CNS recovery record = fully recovered
+                cns_recovery = {
+                    'id': None,
+                    'cns_load': 0.0,
+                    'recovery_hours': 0,
+                    'recovery_until': None,
+                    'is_recovered': True,
+                    'source_workout': None,
+                    'hours_until_recovery': 0,
+                    'recovery_percentage': 100,
+                    'created_at': None,
+                    'updated_at': None
+                }
+        else:
+            # FREE users get null CNS recovery with upgrade message
+            cns_recovery = None
+        
         return Response({
             'recovery_status': recovery_status,
+            'cns_recovery': cns_recovery,
+            'is_pro': is_pro_user(request.user),
             'timestamp': timezone.now().isoformat()
         }, status=status.HTTP_200_OK)
 
@@ -1524,16 +1582,31 @@ class VolumeAnalysisView(APIView):
         start_date_param = request.query_params.get('start_date', None)
         end_date_param = request.query_params.get('end_date', None)
         
+        # PRO check: FREE users limited to 4 weeks
+        is_pro = is_pro_user(request.user)
+        max_weeks_free = 4
+        
         try:
             weeks_back = int(weeks_back)
         except ValueError:
             weeks_back = 12
+        
+        # Limit FREE users to 4 weeks
+        if not is_pro and weeks_back > max_weeks_free:
+            weeks_back = max_weeks_free
         
         # Calculate date range
         if start_date_param and end_date_param:
             try:
                 start_date = datetime.strptime(start_date_param, '%Y-%m-%d').date()
                 end_date = datetime.strptime(end_date_param, '%Y-%m-%d').date()
+                
+                # For FREE users, limit date range to 4 weeks
+                if not is_pro:
+                    max_days = max_weeks_free * 7
+                    days_diff = (end_date - start_date).days
+                    if days_diff > max_days:
+                        start_date = end_date - timedelta(days=max_days)
             except ValueError:
                 return Response({'error': 'Invalid date format. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
         else:
@@ -1674,7 +1747,9 @@ class VolumeAnalysisView(APIView):
                 'total_weeks': len(weeks_list)
             },
             'weeks': weeks_list,
-            'summary': summary
+            'summary': summary,
+            'is_pro': is_pro,
+            'weeks_limit': max_weeks_free if not is_pro else None
         }, status=status.HTTP_200_OK)
 
 class WorkoutSummaryView(APIView):
@@ -1693,6 +1768,8 @@ class WorkoutSummaryView(APIView):
             workout = Workout.objects.get(id=workout_id, user=request.user)
         except Workout.DoesNotExist:
             return Response({'error': 'Workout not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        is_pro = is_pro_user(request.user)
         
         # Get pre-workout recovery data
         pre_recovery = WorkoutMuscleRecovery.objects.filter(
@@ -1761,65 +1838,66 @@ class WorkoutSummaryView(APIView):
                     'pre_recovery': pre_recovery_progress
                 }
         
-        # 1RM performance analysis
-        for exercise_id, data in exercise_1rm_data.items():
-            current_1rm = data['current_1rm']
-            exercise_name = data['exercise_name']
-            
-            # Get previous 1RM for this exercise (most recent before this workout)
-            workout_datetime = workout.datetime or workout.created_at
-            previous_workout_exercise = WorkoutExercise.objects.filter(
-                exercise_id=exercise_id,
-                workout__user=request.user,
-                workout__is_done=True,
-                one_rep_max__isnull=False
-            ).exclude(workout=workout).order_by('-workout__datetime', '-workout__created_at').first()
-            
-            if previous_workout_exercise and previous_workout_exercise.one_rep_max:
-                previous_1rm = float(previous_workout_exercise.one_rep_max)
-                difference = current_1rm - previous_1rm
-                percent_change = (difference / previous_1rm) * 100 if previous_1rm > 0 else 0
+        # 1RM performance analysis (PRO only)
+        if is_pro:
+            for exercise_id, data in exercise_1rm_data.items():
+                current_1rm = data['current_1rm']
+                exercise_name = data['exercise_name']
                 
-                if difference > 0:
-                    # Higher 1RM - positive
-                    positives[f'{exercise_name}_1rm'] = {
-                        'type': '1rm',
-                        'message': f'{exercise_name}: 1RM increased from {previous_1rm:.1f}kg to {current_1rm:.1f}kg (+{percent_change:.1f}%)',
-                        'current_1rm': current_1rm,
-                        'previous_1rm': previous_1rm,
-                        'difference': difference,
-                        'percent_change': round(percent_change, 1)
-                    }
-                elif difference < 0:
-                    # Lower 1RM - negative
-                    negatives[f'{exercise_name}_1rm'] = {
-                        'type': '1rm',
-                        'message': f'{exercise_name}: 1RM decreased from {previous_1rm:.1f}kg to {current_1rm:.1f}kg ({percent_change:.1f}%)',
-                        'current_1rm': current_1rm,
-                        'previous_1rm': previous_1rm,
-                        'difference': difference,
-                        'percent_change': round(percent_change, 1)
-                    }
+                # Get previous 1RM for this exercise (most recent before this workout)
+                workout_datetime = workout.datetime or workout.created_at
+                previous_workout_exercise = WorkoutExercise.objects.filter(
+                    exercise_id=exercise_id,
+                    workout__user=request.user,
+                    workout__is_done=True,
+                    one_rep_max__isnull=False
+                ).exclude(workout=workout).order_by('-workout__datetime', '-workout__created_at').first()
+                
+                if previous_workout_exercise and previous_workout_exercise.one_rep_max:
+                    previous_1rm = float(previous_workout_exercise.one_rep_max)
+                    difference = current_1rm - previous_1rm
+                    percent_change = (difference / previous_1rm) * 100 if previous_1rm > 0 else 0
+                    
+                    if difference > 0:
+                        # Higher 1RM - positive
+                        positives[f'{exercise_name}_1rm'] = {
+                            'type': '1rm',
+                            'message': f'{exercise_name}: 1RM increased from {previous_1rm:.1f}kg to {current_1rm:.1f}kg (+{percent_change:.1f}%)',
+                            'current_1rm': current_1rm,
+                            'previous_1rm': previous_1rm,
+                            'difference': difference,
+                            'percent_change': round(percent_change, 1)
+                        }
+                    elif difference < 0:
+                        # Lower 1RM - negative
+                        negatives[f'{exercise_name}_1rm'] = {
+                            'type': '1rm',
+                            'message': f'{exercise_name}: 1RM decreased from {previous_1rm:.1f}kg to {current_1rm:.1f}kg ({percent_change:.1f}%)',
+                            'current_1rm': current_1rm,
+                            'previous_1rm': previous_1rm,
+                            'difference': difference,
+                            'percent_change': round(percent_change, 1)
+                        }
+                    else:
+                        # Same 1RM - neutral
+                        neutrals[f'{exercise_name}_1rm'] = {
+                            'type': '1rm',
+                            'message': f'{exercise_name}: 1RM maintained at {current_1rm:.1f}kg',
+                            'current_1rm': current_1rm,
+                            'previous_1rm': previous_1rm,
+                            'difference': 0,
+                            'percent_change': 0
+                        }
                 else:
-                    # Same 1RM - neutral
+                    # No previous 1RM - neutral (first time or no data)
                     neutrals[f'{exercise_name}_1rm'] = {
                         'type': '1rm',
-                        'message': f'{exercise_name}: 1RM maintained at {current_1rm:.1f}kg',
+                        'message': f'{exercise_name}: No previous 1RM data to compare',
                         'current_1rm': current_1rm,
-                        'previous_1rm': previous_1rm,
-                        'difference': 0,
-                        'percent_change': 0
+                        'previous_1rm': None,
+                        'difference': None,
+                        'percent_change': None
                     }
-            else:
-                # No previous 1RM - neutral (first time or no data)
-                neutrals[f'{exercise_name}_1rm'] = {
-                    'type': '1rm',
-                    'message': f'{exercise_name}: No previous 1RM data to compare',
-                    'current_1rm': current_1rm,
-                    'previous_1rm': None,
-                    'difference': None,
-                    'percent_change': None
-                }
         
         # Calculate score (out of 10)
         # Base score: 5.0
@@ -1846,7 +1924,9 @@ class WorkoutSummaryView(APIView):
                 'total_neutrals': len(neutrals),
                 'muscles_worked': sorted(list(muscles_worked)),
                 'exercises_performed': len(exercise_1rm_data)
-            }
+            },
+            'is_pro': is_pro,
+            'has_advanced_insights': is_pro  # Indicates if 1RM analysis is included
         }, status=status.HTTP_200_OK)
 
     
