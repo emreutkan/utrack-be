@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import CreateWorkoutView, AddExerciseToWorkoutView, AddExerciseSetToWorkoutExerciseView, GetWorkoutView, GetActiveWorkoutView, DeleteExerciseSetView, DeleteWorkoutExerciseView, UpdateExerciseOrderView, CompleteWorkoutView, DeleteWorkoutView, CheckWorkoutPerformedTodayView, CreateTemplateWorkoutView, GetTemplateWorkoutsView, StartTemplateWorkoutView, DeleteTemplateWorkoutView, UpdateWorkoutView, UpdateExerciseSetView, GetRestTimerStateView, StopRestTimerView, ResumeRestTimerView, CalendarView, GetAvailableYearsView, CalendarStatsView, GetExercise1RMHistoryView, GetRecoveryRecommendationsView, GetRestPeriodRecommendationsView, GetTrainingFrequencyRecommendationsView, GetRelevantResearchView, GetMuscleRecoveryStatusView, VolumeAnalysisView, WorkoutSummaryView
+from .views import CreateWorkoutView, AddExerciseToWorkoutView, AddExerciseSetToWorkoutExerciseView, GetWorkoutView, GetActiveWorkoutView, DeleteExerciseSetView, DeleteWorkoutExerciseView, UpdateExerciseOrderView, CompleteWorkoutView, DeleteWorkoutView, CheckWorkoutPerformedTodayView, CreateTemplateWorkoutView, GetTemplateWorkoutsView, StartTemplateWorkoutView, DeleteTemplateWorkoutView, UpdateWorkoutView, UpdateExerciseSetView, GetRestTimerStateView, StopRestTimerView, ResumeRestTimerView, CalendarView, GetAvailableYearsView, CalendarStatsView, GetExercise1RMHistoryView, GetExerciseSetHistoryView, GetRecoveryRecommendationsView, GetRestPeriodRecommendationsView, GetTrainingFrequencyRecommendationsView, GetRelevantResearchView, GetMuscleRecoveryStatusView, VolumeAnalysisView, WorkoutSummaryView
 urlpatterns = [
     path('create/', CreateWorkoutView.as_view(), name='create-workout'),
     path('list/', GetWorkoutView.as_view(), name='list-workouts'),
@@ -16,6 +16,7 @@ urlpatterns = [
     path('years/', GetAvailableYearsView.as_view(), name='available-years'),
     # 1RM History endpoint
     path('exercise/<int:exercise_id>/1rm-history/', GetExercise1RMHistoryView.as_view(), name='exercise-1rm-history'),
+    path('exercise/<int:exercise_id>/set-history/', GetExerciseSetHistoryView.as_view(), name='exercise-set-history'),
     # Training recommendations endpoints
     path('recommendations/recovery/', GetRecoveryRecommendationsView.as_view(), name='recovery-recommendations'),
     path('exercise/<int:workout_exercise_id>/rest-recommendations/', GetRestPeriodRecommendationsView.as_view(), name='rest-recommendations'),

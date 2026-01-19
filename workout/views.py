@@ -1248,6 +1248,49 @@ class GetExercise1RMHistoryView(APIView):
             'total_workouts': len(history)
         })
 
+class GetExerciseSetHistoryView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, exercise_id):
+        """
+        GET /api/workout/exercise/<exercise_id>/set-history/
+        Returns paginated set history for a specific exercise across all workouts.
+        """
+        try:
+            # Verify exercise exists
+            exercise = Exercise.objects.get(id=exercise_id)
+        except Exercise.DoesNotExist:
+            return Response({'error': 'Exercise not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Get all sets for this exercise from completed workouts
+        sets = ExerciseSet.objects.filter(
+            workout_exercise__exercise_id=exercise_id,
+            workout_exercise__workout__user=request.user,
+            workout_exercise__workout__is_done=True
+        ).select_related(
+            'workout_exercise__workout'
+        ).order_by('-workout_exercise__workout__datetime', '-set_number')
+        
+        # Use pagination
+        paginator = WorkoutPagination()
+        paginated_sets = paginator.paginate_queryset(sets, request)
+        
+        history = []
+        for exercise_set in paginated_sets:
+            workout = exercise_set.workout_exercise.workout
+            history.append({
+                'id': exercise_set.id,
+                'weight': float(exercise_set.weight),
+                'reps': exercise_set.reps,
+                'is_warmup': exercise_set.is_warmup,
+                'set_number': exercise_set.set_number,
+                'workout_id': workout.id,
+                'workout_title': workout.title,
+                'workout_date': workout.datetime.isoformat(),
+            })
+        
+        return paginator.get_paginated_response(history)
+
 class GetRecoveryRecommendationsView(APIView):
     permission_classes = [IsAuthenticated]
     
