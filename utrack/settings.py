@@ -129,6 +129,7 @@ INSTALLED_APPS = [
     'workout', # Add workout app
     'supplements', # Add supplements app
     'body_measurements', # Add body measurements app
+    'achievements', # Add achievements app
     'django.contrib.sites',       # Required by allauth
     'allauth',
     'allauth.account',

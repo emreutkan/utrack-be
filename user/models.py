@@ -47,6 +47,9 @@ class CustomUser(AbstractUser, TimestampedModel):
     is_pro = models.BooleanField(default=False, help_text="Whether user has active PRO subscription")
     pro_until = models.DateTimeField(null=True, blank=True, help_text="PRO subscription expiration date")
     subscription_id = models.CharField(max_length=255, blank=True, help_text="Payment provider subscription ID (Stripe, RevenueCat, etc.)")
+    
+    # Free trial fields
+    trial_until = models.DateTimeField(null=True, blank=True, help_text="Free trial expiration date")
 
     USERNAME_FIELD = 'email'  ## this tells Django that the email field is used for authentication instead of the username field
     REQUIRED_FIELDS = []

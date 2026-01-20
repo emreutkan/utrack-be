@@ -1217,12 +1217,16 @@ class GetExercise1RMHistoryView(APIView):
         """
         GET /api/workout/exercise/<exercise_id>/1rm-history/
         Returns 1RM history for a specific exercise across all workouts.
+        PRO: Full history
+        FREE: Last 30 days only
         """
         try:
             # Verify exercise exists
             exercise = Exercise.objects.get(id=exercise_id)
         except Exercise.DoesNotExist:
             return Response({'error': 'Exercise not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+        is_pro = is_pro_user(request.user)
         
         # Get all workout exercises for this exercise, only from completed workouts
         workout_exercises = WorkoutExercise.objects.filter(
@@ -1231,6 +1235,13 @@ class GetExercise1RMHistoryView(APIView):
             workout__is_done=True,
             one_rep_max__isnull=False
         ).select_related('workout').order_by('-workout__datetime')
+        
+        # Limit FREE users to last 30 days
+        if not is_pro:
+            thirty_days_ago = timezone.now() - timedelta(days=30)
+            workout_exercises = workout_exercises.filter(
+                workout__datetime__gte=thirty_days_ago
+            )
         
         history = []
         for workout_exercise in workout_exercises:
@@ -1245,7 +1256,9 @@ class GetExercise1RMHistoryView(APIView):
             'exercise_id': exercise_id,
             'exercise_name': exercise.name,
             'history': history,
-            'total_workouts': len(history)
+            'total_workouts': len(history),
+            'is_pro': is_pro,
+            'days_limit': 30 if not is_pro else None
         })
 
 class GetExerciseSetHistoryView(APIView):
@@ -1485,7 +1498,12 @@ class GetRelevantResearchView(APIView):
         GET /api/workout/research/
         Returns relevant research articles based on query params.
         Query params: category, muscle_group, exercise_type, tags
+        PRO only feature.
         """
+        # PRO check
+        if not is_pro_user(request.user):
+            return get_pro_response()
+        
         category = request.query_params.get('category', None)
         muscle_group = request.query_params.get('muscle_group', None)
         exercise_type = request.query_params.get('exercise_type', None)
