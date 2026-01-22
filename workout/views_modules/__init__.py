@@ -1,11 +1,10 @@
 """
-Workout views - imports from organized modules for backward compatibility.
-All views are now organized in workout/views_modules/ for better maintainability.
+Workout views organized into logical modules.
+All views are imported here and re-exported for backward compatibility.
 """
 
-# Import all views from organized modules
-from .views_modules import (
-    # CRUD operations
+# Import all views from modules
+from .workout_crud import (
     CreateWorkoutView,
     GetWorkoutView,
     GetActiveWorkoutView,
@@ -15,42 +14,55 @@ from .views_modules import (
     CheckWorkoutPerformedTodayView,
     TotalWorkoutsPerformedView,
     WorkoutPagination,
-    # Exercise management
+)
+
+from .workout_exercises import (
     AddExerciseToWorkoutView,
     AddExerciseSetToWorkoutExerciseView,
     UpdateExerciseSetView,
     DeleteExerciseSetView,
     DeleteWorkoutExerciseView,
     UpdateExerciseOrderView,
-    # History & Calendar
+)
+
+from .workout_history import (
     GetExercise1RMHistoryView,
     GetExerciseSetHistoryView,
     GetExerciseLastWorkoutView,
     CalendarView,
     GetAvailableYearsView,
     CalendarStatsView,
-    # Templates
+)
+
+from .workout_templates import (
     CreateTemplateWorkoutView,
     GetTemplateWorkoutsView,
     DeleteTemplateWorkoutView,
     StartTemplateWorkoutView,
-    # Timer
+)
+
+from .workout_timer import (
     GetRestTimerStateView,
     StopRestTimerView,
     ResumeRestTimerView,
-    # Recovery
+)
+
+from .workout_recovery import (
     GetRecoveryRecommendationsView,
     GetRestPeriodRecommendationsView,
     GetTrainingFrequencyRecommendationsView,
     GetRelevantResearchView,
     GetMuscleRecoveryStatusView,
-    # Analytics
+)
+
+from .workout_analytics import (
     VolumeAnalysisView,
     WorkoutSummaryView,
 )
 
-# Re-export everything for backward compatibility
+# Re-export everything
 __all__ = [
+    # CRUD
     'CreateWorkoutView',
     'GetWorkoutView',
     'GetActiveWorkoutView',
@@ -59,32 +71,38 @@ __all__ = [
     'CompleteWorkoutView',
     'CheckWorkoutPerformedTodayView',
     'TotalWorkoutsPerformedView',
-    'WorkoutPagination',
+    # Exercises
     'AddExerciseToWorkoutView',
     'AddExerciseSetToWorkoutExerciseView',
     'UpdateExerciseSetView',
     'DeleteExerciseSetView',
     'DeleteWorkoutExerciseView',
     'UpdateExerciseOrderView',
+    # History
     'GetExercise1RMHistoryView',
     'GetExerciseSetHistoryView',
     'GetExerciseLastWorkoutView',
     'CalendarView',
     'GetAvailableYearsView',
     'CalendarStatsView',
+    # Templates
     'CreateTemplateWorkoutView',
     'GetTemplateWorkoutsView',
     'DeleteTemplateWorkoutView',
     'StartTemplateWorkoutView',
+    # Timer
     'GetRestTimerStateView',
     'StopRestTimerView',
     'ResumeRestTimerView',
+    # Recovery
     'GetRecoveryRecommendationsView',
     'GetRestPeriodRecommendationsView',
     'GetTrainingFrequencyRecommendationsView',
     'GetRelevantResearchView',
     'GetMuscleRecoveryStatusView',
+    # Analytics
     'VolumeAnalysisView',
     'WorkoutSummaryView',
+    # Pagination
+    'WorkoutPagination',
 ]
-    

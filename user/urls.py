@@ -6,9 +6,9 @@ from .views import (
     CheckEmailView, CheckPasswordView, CheckNameView,
     DataExportView, DataImportView
 )
-from rest_framework_simplejwt.views import (
-    TokenObtainPairView,
-    TokenRefreshView,
+from .custom_auth_views import (
+    ThrottledTokenObtainPairView,
+    ThrottledTokenRefreshView,
 )
 
 urlpatterns = [
@@ -25,8 +25,8 @@ urlpatterns = [
     path('check-email/', CheckEmailView.as_view(), name='check_email'),
     path('check-password/', CheckPasswordView.as_view(), name='check_password'),
     path('check-name/', CheckNameView.as_view(), name='check_name'),
-    path('login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('login/', ThrottledTokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('refresh/', ThrottledTokenRefreshView.as_view(), name='token_refresh'),
     path('data/export/', DataExportView.as_view(), name='data_export'),
     path('data/import/', DataImportView.as_view(), name='data_import'),
 ]

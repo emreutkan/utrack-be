@@ -3,7 +3,13 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
+from utrack.throttles import (
+    LoginRateThrottle, RegistrationRateThrottle,
+    BurstRateThrottle, SustainedRateThrottle,
+    ProUserRateThrottle
+)
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
@@ -32,6 +38,7 @@ User = get_user_model()
 
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
+    throttle_classes = [RegistrationRateThrottle]  # 3 registrations per hour per IP
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -166,6 +173,8 @@ class ChangePasswordView(APIView):
 
 class RequestPasswordResetView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]  # Uses 'password_reset' scope: 3/hour
+    throttle_scope = 'password_reset'
     
     def post(self, request):
         """

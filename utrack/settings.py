@@ -271,6 +271,30 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
         'dj_rest_auth.jwt_auth.JWTCookieAuthentication', # Optional, for cookie auth
     ),
+    # Rate limiting/throttling configuration
+    'DEFAULT_THROTTLE_CLASSES': [
+        'utrack.throttles.AnonBurstRateThrottle',
+        'utrack.throttles.AnonSustainedRateThrottle',
+        'utrack.throttles.BurstRateThrottle',
+        'utrack.throttles.SustainedRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        # Anonymous users
+        'anon_burst': '10/minute',      # 10 requests per minute for anonymous users
+        'anon_sustained': '100/hour',    # 100 requests per hour for anonymous users
+        
+        # Authenticated users (FREE)
+        'burst': '60/minute',            # 60 requests per minute
+        'sustained': '1000/hour',        # 1000 requests per hour
+        
+        # PRO users (higher limits)
+        'pro_user': '200/minute',        # 200 requests per minute for PRO users
+        
+        # Specific endpoints
+        'login': '5/minute',             # 5 login attempts per minute (prevent brute force)
+        'registration': '3/hour',        # 3 registrations per hour per IP
+        'password_reset': '3/hour',      # 3 password reset requests per hour
+    },
 }
 
 from datetime import timedelta
