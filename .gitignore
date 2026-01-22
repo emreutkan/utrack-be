@@ -12,6 +12,8 @@ logs/
 *.pem
 utrack-key.pem
 datadump_clean.json
+*.md
+!README.md
 
 
 

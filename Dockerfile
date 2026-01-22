@@ -13,9 +13,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-# It is better to put gunicorn and psycopg2 inside your requirements.txt 
-# to keep this file clean, but this works too:
-RUN pip install --no-cache-dir -r requirements.txt gunicorn psycopg2-binary
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
