@@ -28,6 +28,10 @@ import io
 import zipfile
 import json
 from django.http import HttpResponse
+from django.core.mail import EmailMultiAlternatives
+from django.template.loader import render_to_string
+from django.conf import settings
+import logging
 from django.db import transaction
 from workout.models import Workout, WorkoutExercise, ExerciseSet, TemplateWorkout, TemplateWorkoutExercise
 from supplements.models import UserSupplement, UserSupplementLog, Supplement
@@ -202,9 +206,40 @@ class RequestPasswordResetView(APIView):
         token = default_token_generator.make_token(user)
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         
-        # TODO: Send email with reset link here
-        # In production, send email with reset link instead of returning token
-        # For security, don't return token in response
+        # Build reset URL
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
+        reset_url = f"{frontend_url}/reset-password?uid={uid}&token={token}"
+        
+        # Send email with reset link
+        try:
+            # Render email templates
+            html_content = render_to_string('emails/password_reset.html', {
+                'reset_url': reset_url,
+                'user': user
+            })
+            text_content = render_to_string('emails/password_reset.txt', {
+                'reset_url': reset_url,
+                'user': user
+            })
+            
+            # Create email
+            email = EmailMultiAlternatives(
+                subject='Password Reset Request - UTrack',
+                body=text_content,
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None),
+                to=[user.email]
+            )
+            email.attach_alternative(html_content, "text/html")
+            email.send()
+            
+            logger = logging.getLogger('user')
+            logger.info(f"Password reset email sent to {user.email}")
+            
+        except Exception as e:
+            # Log error but don't reveal to user (security)
+            logger = logging.getLogger('user')
+            logger.error(f"Failed to send password reset email to {user.email}: {str(e)}")
+            # Still return success message to prevent email enumeration
         
         return Response({
             'message': 'If an account with this email exists, a password reset link has been sent.'
