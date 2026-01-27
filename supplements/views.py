@@ -2,6 +2,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from drf_spectacular.utils import extend_schema, OpenApiParameter
+from drf_spectacular.types import OpenApiTypes
 from .models import Supplement, UserSupplement, UserSupplementLog
 from .serializers import SupplementSerializer, UserSupplementSerializer, UserSupplementLogSerializer
 from django.views.decorators.cache import cache_page
@@ -44,6 +46,25 @@ class UserSupplementListCreateView(APIView):
 class UserSupplementLogListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        operation_id='user_supplement_log_list',
+        summary='List supplement logs',
+        description='Get logs for a specific user supplement. Requires user_supplement_id query parameter.',
+        parameters=[
+            OpenApiParameter(
+                name='user_supplement_id',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                description='ID of the user supplement to get logs for (required)',
+                required=True
+            )
+        ],
+        responses={
+            200: UserSupplementLogSerializer(many=True),
+            400: None,
+            404: None
+        }
+    )
     def get(self, request):
         # Require user_supplement_id to filter by specific supplement
         user_supplement_id = request.query_params.get('user_supplement_id')
@@ -52,7 +73,8 @@ class UserSupplementLogListCreateView(APIView):
             return Response({
                 'error': 'user_supplement_id is required. Use query parameter: ?user_supplement_id=<id>'
             }, status=status.HTTP_400_BAD_REQUEST)
-        
+
+
         try:
             # Verify the user_supplement belongs to the user
             user_supplement = UserSupplement.objects.get(id=user_supplement_id, user=request.user)
@@ -68,7 +90,14 @@ class UserSupplementLogListCreateView(APIView):
         serializer = UserSupplementLogSerializer(user_supplement_logs, many=True)
         return Response(serializer.data)
 
+    @extend_schema(
+        request=UserSupplementLogSerializer,
+        responses={201: UserSupplementLogSerializer, 400: None}
+    )
     def post(self, request):
+        user_supplement_id = request.data.get('user_supplement_id')
+        if UserSupplementLog.logged_today(request.user, user_supplement_id):
+            return Response({'error': 'You have already logged today'}, status=status.HTTP_400_BAD_REQUEST)
         serializer = UserSupplementLogSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(user=request.user)

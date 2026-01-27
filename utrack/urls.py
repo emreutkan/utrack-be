@@ -19,7 +19,8 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from user.social_views import GoogleLogin, AppleLogin # Import the views you just created
-from rest_framework_simplejwt.views import TokenRefreshView
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
+# Removed TokenRefreshView import - using custom ThrottledTokenRefreshView from user.urls instead
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -29,13 +30,12 @@ urlpatterns = [
     path('api/exercise/', include('exercise.url')),
     path('api/measurements/', include('body_measurements.urls')),
     path('api/achievements/', include('achievements.urls')),
-    path('auth/', include('dj_rest_auth.urls')),
-    path('auth/registration/', include('dj_rest_auth.registration.urls')),
+
     path('auth/google/', GoogleLogin.as_view(), name='google_login'),
     path('auth/apple/', AppleLogin.as_view(), name='apple_login'),
-    # Add this line to expose the refresh endpoint at the root level /api/token/refresh/
-    # OR change your client to point to /api/user/refresh/ which is where it is currently located inside user.urls
-    path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'), 
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
 ]
 
 if settings.DEBUG:

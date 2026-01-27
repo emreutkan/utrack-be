@@ -138,6 +138,7 @@ INSTALLED_APPS = [
     'allauth.socialaccount.providers.apple',
     'dj_rest_auth',
     'dj_rest_auth.registration',
+    'drf_spectacular',  # API documentation
     
 ]
 
@@ -295,6 +296,7 @@ REST_FRAMEWORK = {
         'registration': '3/hour',        # 3 registrations per hour per IP
         'password_reset': '3/hour',      # 3 password reset requests per hour
     },
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
 from datetime import timedelta

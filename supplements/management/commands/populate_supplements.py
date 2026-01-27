@@ -316,6 +316,36 @@ class Command(BaseCommand):
                 "bioavailability_score": "Very Low. Conversion rate is <5%. You would need to eat massive amounts of flax to get the same benefit as a small pill of fish oil.",
                 "dosage_unit": "mg",
                 "default_dosage": 1000
+            },
+
+            # Creatine
+            {
+                "name": "Creatine Monohydrate",
+                "description": "Best For: Strength, power output, muscle mass, and cognitive function. The most researched and cost-effective form.",
+                "bioavailability_score": "High. Well-absorbed when taken with carbohydrates or protein. Standard loading phase: 20g/day for 5-7 days, then 3-5g/day maintenance.",
+                "dosage_unit": "g",
+                "default_dosage": 5
+            },
+            {
+                "name": "Creatine HCl (Creatine Hydrochloride)",
+                "description": "Best For: People who experience bloating or stomach issues with monohydrate. More soluble in water.",
+                "bioavailability_score": "High. May cause less water retention/bloating than monohydrate. Typically requires smaller doses (1-2g vs 5g).",
+                "dosage_unit": "g",
+                "default_dosage": 2
+            },
+            {
+                "name": "Creatine Ethyl Ester",
+                "description": "Best For: Marketed as 'better absorbed' but research shows it's less effective than monohydrate.",
+                "bioavailability_score": "Lower. Converts to creatinine (waste product) before reaching muscles. Generally not recommended.",
+                "dosage_unit": "g",
+                "default_dosage": 3
+            },
+            {
+                "name": "Buffered Creatine (Kre-Alkalyn)",
+                "description": "Best For: Marketed as pH-buffered to reduce conversion to creatinine, but research doesn't show superiority over monohydrate.",
+                "bioavailability_score": "Similar to monohydrate. More expensive with no proven advantage.",
+                "dosage_unit": "g",
+                "default_dosage": 3
             }
         ]
 

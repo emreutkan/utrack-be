@@ -1,7 +1,7 @@
 from django.db import models
 from core.models import TimestampedModel
 from user.models import CustomUser
-
+from django.utils import timezone
 class Supplement(TimestampedModel):
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
@@ -27,6 +27,7 @@ class Supplement(TimestampedModel):
     
     def __str__(self):
         return self.name
+
 
 class UserSupplement(TimestampedModel):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='user_supplements')
@@ -58,3 +59,7 @@ class UserSupplementLog(TimestampedModel):
     
     def __str__(self):
         return f"{self.user.email} - {self.user_supplement.supplement.name} - {self.date} - {self.time}"
+
+    def logged_today(user, user_supplement_id):
+        today = timezone.now().date()
+        return UserSupplementLog.objects.filter(user=user, user_supplement_id=user_supplement_id, date=today).exists()

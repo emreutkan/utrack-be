@@ -21,7 +21,8 @@ class UserSupplementSerializer(serializers.ModelSerializer):
             'dosage', 
             'frequency', 
             'time_of_day', 
-            'is_active'
+            'is_active',
+            
         ]
 
 class UserSupplementLogSerializer(serializers.ModelSerializer):
