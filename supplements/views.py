@@ -20,7 +20,9 @@ class SupplementListView(APIView):
     def get(self, request):
         query = request.query_params.get('search', None)
         if query:
-            supplements = supplements.filter(
+            supplements = Supplement.objects.filter(
+                is_active=True
+            ).filter(
                 Q(name__icontains=query) | Q(description__icontains=query)
             )
         else:
