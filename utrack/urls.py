@@ -20,10 +20,12 @@ from django.conf import settings
 from django.conf.urls.static import static
 from user.social_views import GoogleLogin, AppleLogin # Import the views you just created
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
+from core.views import HealthCheckView
 # Removed TokenRefreshView import - using custom ThrottledTokenRefreshView from user.urls instead
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/health/', HealthCheckView.as_view(), name='health-check'),
     path('api/user/', include('user.urls')),
     path('api/workout/', include('workout.urls')),
     path('api/supplements/', include('supplements.urls')),
