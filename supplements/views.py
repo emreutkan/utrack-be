@@ -10,8 +10,16 @@ from django.views.decorators.cache import cache_page
 from django.utils.decorators import method_decorator
 from django.db.models import Q
 from django.utils import timezone
+from rest_framework.pagination import PageNumberPagination
+
+class SupplementPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 200
+
 class SupplementListView(APIView):
     permission_classes = [IsAuthenticated]
+    pagination_class = SupplementPagination
 
     # Cache this view for 15 minutes (60 seconds * 15) 
     # django keeps cached data in memory for 15 minutes so it doesn't have to hit the database every time
@@ -27,16 +35,26 @@ class SupplementListView(APIView):
             )
         else:
             supplements = Supplement.objects.filter(is_active=True)
-        serializer = SupplementSerializer(supplements, many=True)
-        return Response(serializer.data)
+        
+        paginator = self.pagination_class()
+        paginated_supplements = paginator.paginate_queryset(supplements, request)
+        serializer = SupplementSerializer(paginated_supplements, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
 class UserSupplementListCreateView(APIView):
     permission_classes = [IsAuthenticated]
+    pagination_class = SupplementPagination
 
     def get(self, request):
-        user_supplements = UserSupplement.objects.filter(user=request.user, is_active=True)
-        serializer = UserSupplementSerializer(user_supplements, many=True)
-        return Response(serializer.data)
+        user_supplements = UserSupplement.objects.filter(
+            user=request.user, 
+            is_active=True
+        ).select_related('supplement')
+        
+        paginator = self.pagination_class()
+        paginated_supplements = paginator.paginate_queryset(user_supplements, request)
+        serializer = UserSupplementSerializer(paginated_supplements, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     def post(self, request):
         serializer = UserSupplementSerializer(data=request.data)
@@ -79,7 +97,10 @@ class UserSupplementLogListCreateView(APIView):
 
         try:
             # Verify the user_supplement belongs to the user
-            user_supplement = UserSupplement.objects.get(id=user_supplement_id, user=request.user)
+            user_supplement = UserSupplement.objects.select_related('supplement').get(
+                id=user_supplement_id, 
+                user=request.user
+            )
         except UserSupplement.DoesNotExist:
             return Response({'error': 'User supplement not found'}, status=status.HTTP_404_NOT_FOUND)
         
@@ -87,7 +108,7 @@ class UserSupplementLogListCreateView(APIView):
         user_supplement_logs = UserSupplementLog.objects.filter(
             user=request.user,
             user_supplement_id=user_supplement_id
-        ).order_by('-date', '-time')
+        ).select_related('user_supplement__supplement').order_by('-date', '-time')
         
         serializer = UserSupplementLogSerializer(user_supplement_logs, many=True)
         return Response(serializer.data)
@@ -117,7 +138,7 @@ class UserSupplementLogTodayView(APIView):
         today_logs = UserSupplementLog.objects.filter(
             user=request.user,
             date=today
-        ).order_by('-time')
+        ).select_related('user_supplement__supplement').order_by('-time')
         
         serializer = UserSupplementLogSerializer(today_logs, many=True)
         return Response({
@@ -130,7 +151,9 @@ class UserSupplementLogDeleteView(APIView):
     permission_classes = [IsAuthenticated]
     def delete(self, request, log_id):
         try:
-            user_supplement_log = UserSupplementLog.objects.get(id=log_id, user=request.user)
+            user_supplement_log = UserSupplementLog.objects.select_related(
+                'user_supplement__supplement'
+            ).get(id=log_id, user=request.user)
             user_supplement_log.delete()
             return Response(status=status.HTTP_204_NO_CONTENT)
         except UserSupplementLog.DoesNotExist:

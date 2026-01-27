@@ -2,6 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
 from django.utils import timezone
 from django.db.models import Sum, Count, Avg, F
 from django.db import transaction
@@ -9,17 +10,19 @@ from decimal import Decimal
 import logging
 import numpy as np
 
+class AchievementPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
 from .models import (
     Achievement, UserAchievement, PersonalRecord,
     ExerciseStatistics, UserStatistics
 )
 from .serializers import (
     AchievementSerializer, UserAchievementSerializer,
-    AchievementProgressSerializer, PersonalRecordSerializer,
-    PersonalRecordSummarySerializer, ExerciseStatisticsSerializer,
-    UserExerciseRankingSerializer, UserStatisticsSerializer,
-    LeaderboardEntrySerializer, NewAchievementNotificationSerializer,
-    PRUpdateResultSerializer
+    PersonalRecordSummarySerializer,  UserStatisticsSerializer,
+ 
 )
 from exercise.models import Exercise
 from workout.models import Workout, WorkoutExercise, ExerciseSet
@@ -34,6 +37,7 @@ class AchievementListView(APIView):
     List all available achievements with user's progress.
     """
     permission_classes = [IsAuthenticated]
+    pagination_class = AchievementPagination
 
     def get(self, request):
         user = request.user
@@ -76,7 +80,10 @@ class AchievementListView(APIView):
                 'earned_value': user_achievement.earned_value if user_achievement else None
             })
 
-        return Response(result)
+        # Paginate the result list
+        paginator = self.pagination_class()
+        paginated_result = paginator.paginate_queryset(result, request)
+        return paginator.get_paginated_response(paginated_result)
 
     def _get_achievement_progress(self, user, achievement):
         """Calculate current progress for an achievement."""
@@ -479,6 +486,7 @@ class LeaderboardView(APIView):
     - stat: 'weight' or 'one_rm' (default 'one_rm')
     """
     permission_classes = [IsAuthenticated]
+    pagination_class = AchievementPagination
 
     def get(self, request, exercise_id):
         # PRO check
@@ -503,7 +511,7 @@ class LeaderboardView(APIView):
 
         top_prs = PersonalRecord.objects.filter(
             exercise=exercise
-        ).filter(**{f'{value_field}__gt': 0}).select_related('user').order_by(order_field)[:limit]
+        ).filter(**{f'{value_field}__gt': 0}).select_related('user', 'exercise').order_by(order_field)[:limit]
 
         leaderboard = []
         for rank, pr in enumerate(top_prs, 1):
@@ -523,7 +531,10 @@ class LeaderboardView(APIView):
         user_entry = None
         if not user_in_list:
             try:
-                user_pr = PersonalRecord.objects.get(user=user, exercise=exercise)
+                user_pr = PersonalRecord.objects.select_related('exercise', 'user').get(
+                    user=user, 
+                    exercise=exercise
+                )
                 user_value = getattr(user_pr, value_field)
 
                 # Calculate user's rank

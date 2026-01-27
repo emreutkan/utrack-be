@@ -2,9 +2,15 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
 from .models import BodyMeasurement
 from .serializers import BodyMeasurementSerializer, CalculateBodyFatSerializer
 import math
+
+class BodyMeasurementPagination(PageNumberPagination):
+    page_size = 30
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 class CreateBodyMeasurementView(APIView):
     permission_classes = [IsAuthenticated]
@@ -30,15 +36,21 @@ class CreateBodyMeasurementView(APIView):
 
 class GetBodyMeasurementsView(APIView):
     permission_classes = [IsAuthenticated]
+    pagination_class = BodyMeasurementPagination
     
     def get(self, request):
         """
         GET /api/measurements/
         Get all body measurements for the user, ordered by date (newest first).
         """
-        measurements = BodyMeasurement.objects.filter(user=request.user).order_by('-created_at')
-        serializer = BodyMeasurementSerializer(measurements, many=True)
-        return Response(serializer.data)
+        measurements = BodyMeasurement.objects.filter(
+            user=request.user
+        ).select_related('user').order_by('-created_at')
+        
+        paginator = self.pagination_class()
+        paginated_measurements = paginator.paginate_queryset(measurements, request)
+        serializer = BodyMeasurementSerializer(paginated_measurements, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
 class CalculateBodyFatMenView(APIView):
     permission_classes = [IsAuthenticated]
